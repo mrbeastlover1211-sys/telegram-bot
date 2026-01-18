@@ -31,6 +31,9 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Send a message with 5 inline button options when the command /start is issued."""
     user = update.effective_user
     
+    # Log user ID for debugging
+    logger.info(f"User {user.first_name} (ID: {user.id}) started the bot")
+    
     # Notify admin of new user
     await notify_admin(
         context,
@@ -40,6 +43,14 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         f"📱 Username: @{user.username or 'No username'}\n"
         f"🕐 Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
     )
+    
+    # Show user their ID if admin not set
+    if not ADMIN_ID:
+        await update.message.reply_text(
+            f"⚠️ Admin not configured yet!\n\n"
+            f"Your User ID: {user.id}\n\n"
+            f"If you're the admin, add this ID to Railway as ADMIN_ID variable."
+        )
     
     # Create inline keyboard with 5 options + Contact Support
     keyboard = [
