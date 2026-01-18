@@ -60,19 +60,31 @@ def main() -> None:
     token = os.environ.get('BOT_TOKEN')
     
     if not token:
-        logger.error("BOT_TOKEN environment variable not set!")
+        logger.error("❌ BOT_TOKEN environment variable not set!")
+        logger.error("Please add BOT_TOKEN to Railway environment variables")
         return
     
+    logger.info(f"✅ Bot token found (length: {len(token)} chars)")
+    
     # Create the Application
-    application = Application.builder().token(token).build()
+    try:
+        application = Application.builder().token(token).build()
+        logger.info("✅ Application built successfully")
+    except Exception as e:
+        logger.error(f"❌ Failed to build application: {e}")
+        return
     
     # Register handlers
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CallbackQueryHandler(button_handler))
+    logger.info("✅ Handlers registered")
     
     # Start the bot
-    logger.info("Bot is starting...")
-    application.run_polling(allowed_updates=Update.ALL_TYPES)
+    logger.info("🚀 Bot is starting polling...")
+    try:
+        application.run_polling(allowed_updates=Update.ALL_TYPES)
+    except Exception as e:
+        logger.error(f"❌ Error running bot: {e}")
 
 if __name__ == '__main__':
     main()
