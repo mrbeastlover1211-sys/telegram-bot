@@ -95,12 +95,82 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         last_user_message[ADMIN_ID] = target_user_id
         
         await query.answer("✅ Quick reply mode activated!", show_alert=False)
-        await query.edit_message_reply_markup(reply_markup=None)  # Remove button
+        await query.edit_message_reply_markup(reply_markup=None)  # Remove buttons
         await context.bot.send_message(
             chat_id=ADMIN_ID,
-            text=f"💬 Quick Reply Mode\n\n"
-                 f"Now just type your message and send it.\n"
-                 f"It will be sent to: {active_chats.get(target_user_id, {}).get('first_name', 'User')} (ID: {target_user_id})"
+            text=f"💬 Quick Reply Mode Activated\n\n"
+                 f"Replying to: {active_chats.get(target_user_id, {}).get('first_name', 'User')} (ID: {target_user_id})\n\n"
+                 f"💡 Just type your message and send it!"
+        )
+        return
+    
+    # Handle Close Ticket button
+    if option.startswith('close_ticket_'):
+        if user.id != ADMIN_ID:
+            await query.answer("❌ Only admin can use this button", show_alert=True)
+            return
+        
+        # Extract user ID from callback data
+        target_user_id = int(option.replace('close_ticket_', ''))
+        
+        if target_user_id not in active_chats:
+            await query.answer("❌ Ticket not found", show_alert=True)
+            return
+        
+        # Close the ticket
+        active_chats[target_user_id]['active'] = False
+        
+        # Notify user
+        try:
+            await context.bot.send_message(
+                chat_id=target_user_id,
+                text="✅ Your support ticket has been closed.\n"
+                     "Thank you for contacting us!\n\n"
+                     "Type /start if you need help again."
+            )
+        except Exception as e:
+            logger.error(f"Failed to notify user of ticket closure: {e}")
+        
+        await query.answer("✅ Ticket closed!", show_alert=True)
+        await query.edit_message_text(
+            text=f"🔒 TICKET CLOSED\n\n"
+                 f"{query.message.text}\n\n"
+                 f"✅ Closed at: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+        )
+        return
+    
+    # Handle View History button
+    if option.startswith('view_history_'):
+        if user.id != ADMIN_ID:
+            await query.answer("❌ Only admin can use this button", show_alert=True)
+            return
+        
+        # Extract user ID from callback data
+        target_user_id = int(option.replace('view_history_', ''))
+        
+        if target_user_id not in active_chats:
+            await query.answer("❌ Chat not found", show_alert=True)
+            return
+        
+        chat_data = active_chats[target_user_id]
+        messages = chat_data.get('messages', [])
+        
+        if not messages:
+            await query.answer("📭 No messages yet", show_alert=True)
+            return
+        
+        # Build message history
+        history = f"📜 Chat History - {chat_data['first_name']}\n\n"
+        for msg in messages[-10:]:  # Show last 10 messages
+            sender = "👤 User" if msg['from'] == 'user' else "👨‍💼 You"
+            history += f"{sender} ({msg['time']}): {msg['text']}\n\n"
+        
+        history += f"{'─' * 30}\n💬 Total: {len(messages)} messages"
+        
+        await query.answer()
+        await context.bot.send_message(
+            chat_id=ADMIN_ID,
+            text=history
         )
         return
     
@@ -246,33 +316,54 @@ async def handle_user_message(update: Update, context: ContextTypes.DEFAULT_TYPE
                     f"💡 Use /tickets to see active chats"
                 )
 
-# Admin command: View active tickets
+# Admin command: View active tickets with action buttons
 async def tickets_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Show all active support tickets (Admin only)."""
+    """Show all active support tickets with quick action buttons (Admin only)."""
     user = update.effective_user
     
     if user.id != ADMIN_ID:
         await update.message.reply_text("❌ This command is only for admins.")
         return
     
-    if not active_chats:
+    # Separate active and recent tickets
+    active_tickets = [(uid, data) for uid, data in active_chats.items() if data.get('active', False)]
+    
+    if not active_tickets:
         await update.message.reply_text("📭 No active support tickets.")
         return
     
-    message = "🎫 Active Support Tickets:\n\n"
-    for user_id, chat_data in active_chats.items():
-        if chat_data['active']:
-            message += (
-                f"👤 {chat_data['first_name']}\n"
-                f"🆔 ID: {user_id}\n"
-                f"📱 @{chat_data['username'] or 'No username'}\n"
-                f"💬 Messages: {len(chat_data['messages'])}\n"
-                f"⚡ Reply: /reply {user_id} message\n"
-                f"🔒 Close: /close {user_id}\n"
-                f"{'─' * 30}\n"
-            )
-    
-    await update.message.reply_text(message)
+    # Show each ticket with action buttons
+    for user_id, chat_data in active_tickets:
+        # Get last message from user
+        user_messages = [msg for msg in chat_data.get('messages', []) if msg.get('from') == 'user']
+        last_message = user_messages[-1]['text'] if user_messages else "No messages yet"
+        last_message_preview = (last_message[:50] + '...') if len(last_message) > 50 else last_message
+        
+        # Create inline keyboard with action buttons
+        keyboard = [
+            [
+                InlineKeyboardButton("💬 Reply", callback_data=f'quick_reply_{user_id}'),
+                InlineKeyboardButton("🔒 Close", callback_data=f'close_ticket_{user_id}')
+            ],
+            [InlineKeyboardButton("📜 View History", callback_data=f'view_history_{user_id}')]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        ticket_info = (
+            f"🎫 Active Ticket\n\n"
+            f"👤 {chat_data['first_name']}\n"
+            f"🆔 ID: {user_id}\n"
+            f"📱 @{chat_data['username'] or 'No username'}\n"
+            f"💬 Total Messages: {len(chat_data['messages'])}\n"
+            f"📝 Last Message: \"{last_message_preview}\"\n"
+            f"{'─' * 30}"
+        )
+        
+        await context.bot.send_message(
+            chat_id=ADMIN_ID,
+            text=ticket_info,
+            reply_markup=reply_markup
+        )
 
 # Admin command: Reply to user
 async def reply_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
