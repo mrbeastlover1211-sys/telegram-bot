@@ -313,6 +313,21 @@ async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     
     await update.message.reply_text(message)
 
+# Command to get your own user ID
+async def myid_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Show the user their Telegram ID."""
+    user = update.effective_user
+    
+    message = (
+        f"👤 Your Telegram Info:\n\n"
+        f"🆔 User ID: `{user.id}`\n"
+        f"📱 Username: @{user.username or 'No username'}\n"
+        f"👋 Name: {user.first_name} {user.last_name or ''}\n\n"
+        f"💡 Copy your User ID and add it to Railway as ADMIN_ID"
+    )
+    
+    await update.message.reply_text(message, parse_mode='Markdown')
+
 def main() -> None:
     """Start the bot."""
     global ADMIN_ID
@@ -350,6 +365,7 @@ def main() -> None:
     # Register handlers
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("stop", stop_command))
+    application.add_handler(CommandHandler("myid", myid_command))
     application.add_handler(CommandHandler("tickets", tickets_command))
     application.add_handler(CommandHandler("reply", reply_command))
     application.add_handler(CommandHandler("close", close_command))
