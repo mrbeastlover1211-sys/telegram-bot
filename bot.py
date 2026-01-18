@@ -17,6 +17,9 @@ ADMIN_ID = None  # Will be set from environment variable
 # Store active support chats: {user_id: {'username': str, 'first_name': str, 'active': bool, 'messages': []}}
 active_chats = {}
 
+# Store last user who messaged admin (for quick reply)
+last_user_message = {}
+
 # Helper function to notify admin
 async def notify_admin(context: ContextTypes.DEFAULT_TYPE, message: str):
     """Send notification to admin."""
@@ -79,6 +82,28 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     user = query.from_user
     option = query.data
     
+    # Handle Quick Reply button
+    if option.startswith('quick_reply_'):
+        if user.id != ADMIN_ID:
+            await query.answer("❌ Only admin can use this button", show_alert=True)
+            return
+        
+        # Extract user ID from callback data
+        target_user_id = int(option.replace('quick_reply_', ''))
+        
+        # Set this user as the active reply target
+        last_user_message[ADMIN_ID] = target_user_id
+        
+        await query.answer("✅ Quick reply mode activated!", show_alert=False)
+        await query.edit_message_reply_markup(reply_markup=None)  # Remove button
+        await context.bot.send_message(
+            chat_id=ADMIN_ID,
+            text=f"💬 Quick Reply Mode\n\n"
+                 f"Now just type your message and send it.\n"
+                 f"It will be sent to: {active_chats.get(target_user_id, {}).get('first_name', 'User')} (ID: {target_user_id})"
+        )
+        return
+    
     # Notify admin of user's selection
     await notify_admin(
         context,
@@ -104,13 +129,22 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                  'Type /stop to end the conversation.'
         )
         
-        await notify_admin(
-            context,
-            f"🆕 NEW SUPPORT TICKET\n"
-            f"👤 {user.first_name} {user.last_name or ''}\n"
-            f"🆔 ID: {user.id}\n"
-            f"📱 @{user.username or 'No username'}\n\n"
-            f"💡 Reply with: /reply {user.id} your message"
+        # Create inline keyboard with Reply button for admin
+        keyboard = [
+            [InlineKeyboardButton("💬 Quick Reply", callback_data=f'quick_reply_{user.id}')]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await context.bot.send_message(
+            chat_id=ADMIN_ID,
+            text=f"🆕 NEW SUPPORT TICKET\n"
+                 f"👤 {user.first_name} {user.last_name or ''}\n"
+                 f"🆔 ID: {user.id}\n"
+                 f"📱 @{user.username or 'No username'}\n\n"
+                 f"🔹 Click button below to reply\n"
+                 f"🔹 Or just type your message\n"
+                 f"🔹 Or use: /reply {user.id} message",
+            reply_markup=reply_markup
         )
         return
     
@@ -142,13 +176,26 @@ async def handle_user_message(update: Update, context: ContextTypes.DEFAULT_TYPE
             'from': 'user'
         })
         
-        # Forward to admin
-        await notify_admin(
-            context,
-            f"💬 Message from {user.first_name} (ID: {user.id})\n"
-            f"📱 @{user.username or 'No username'}\n\n"
-            f"💭 \"{message_text}\"\n\n"
-            f"💡 Reply: /reply {user.id} your_message"
+        # Store as last user who messaged (for quick reply)
+        if ADMIN_ID:
+            last_user_message[ADMIN_ID] = user.id
+        
+        # Create inline keyboard with Reply button
+        keyboard = [
+            [InlineKeyboardButton("💬 Quick Reply", callback_data=f'quick_reply_{user.id}')]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        # Forward to admin with reply button
+        await context.bot.send_message(
+            chat_id=ADMIN_ID,
+            text=f"💬 Message from {user.first_name} (ID: {user.id})\n"
+                 f"📱 @{user.username or 'No username'}\n\n"
+                 f"💭 \"{message_text}\"\n\n"
+                 f"🔹 Click button below to reply\n"
+                 f"🔹 Or just type your message (I'll send to last user)\n"
+                 f"🔹 Or use: /reply {user.id} message",
+            reply_markup=reply_markup
         )
         
         await update.message.reply_text(
@@ -156,11 +203,48 @@ async def handle_user_message(update: Update, context: ContextTypes.DEFAULT_TYPE
             "We'll respond shortly."
         )
     elif user.id == ADMIN_ID:
-        # Admin sent a message without using /reply command
-        await update.message.reply_text(
-            "💡 Use /reply <user_id> <message> to respond to users\n"
-            "Or use /tickets to see all active support tickets"
-        )
+        # Admin is typing a message - check if replying to last user
+        if ADMIN_ID in last_user_message and last_user_message[ADMIN_ID]:
+            target_user_id = last_user_message[ADMIN_ID]
+            
+            # Check if this is a reply to bot's message
+            if update.message.reply_to_message and update.message.reply_to_message.from_user.is_bot:
+                # Admin is replying to a specific message - extract user ID from it
+                replied_text = update.message.reply_to_message.text
+                if "ID: " in replied_text:
+                    try:
+                        # Extract user ID from the message
+                        import re
+                        match = re.search(r'ID: (\d+)', replied_text)
+                        if match:
+                            target_user_id = int(match.group(1))
+                    except:
+                        pass
+            
+            # Send message to the target user
+            try:
+                await context.bot.send_message(
+                    chat_id=target_user_id,
+                    text=f"💬 Support Team Response:\n\n{message_text}"
+                )
+                
+                # Store in chat history
+                if target_user_id in active_chats:
+                    active_chats[target_user_id]['messages'].append({
+                        'text': message_text,
+                        'time': datetime.now().strftime('%H:%M:%S'),
+                        'from': 'admin'
+                    })
+                
+                await update.message.reply_text(
+                    f"✅ Message sent to user {target_user_id}!\n"
+                    f"({active_chats.get(target_user_id, {}).get('first_name', 'User')})"
+                )
+            except Exception as e:
+                await update.message.reply_text(
+                    f"❌ Failed to send message: {e}\n\n"
+                    f"💡 Use /tickets to see active chats"
+                )
 
 # Admin command: View active tickets
 async def tickets_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
