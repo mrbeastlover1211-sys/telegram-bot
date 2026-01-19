@@ -3,6 +3,8 @@ import logging
 from datetime import datetime
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes, MessageHandler, filters
+from pymongo import MongoClient
+from pymongo.errors import ConnectionFailure
 
 # Enable logging
 logging.basicConfig(
@@ -14,11 +16,139 @@ logger = logging.getLogger(__name__)
 # Admin configuration - SET YOUR ADMIN TELEGRAM USER ID HERE
 ADMIN_ID = None  # Will be set from environment variable
 
-# Store active support chats: {user_id: {'username': str, 'first_name': str, 'active': bool, 'messages': []}}
-active_chats = {}
+# MongoDB connection
+mongo_client = None
+db = None
+tickets_collection = None
+users_collection = None
 
 # Store last user who messaged admin (for quick reply)
 last_user_message = {}
+
+def init_mongodb():
+    """Initialize MongoDB connection."""
+    global mongo_client, db, tickets_collection, users_collection
+    
+    mongo_uri = os.environ.get('MONGODB_URI')
+    
+    if not mongo_uri:
+        logger.error("❌ MONGODB_URI environment variable not set!")
+        logger.error("Please add MONGODB_URI to Railway environment variables")
+        return False
+    
+    try:
+        mongo_client = MongoClient(mongo_uri, serverSelectionTimeoutMS=5000)
+        # Test connection
+        mongo_client.admin.command('ping')
+        
+        db = mongo_client['telegram_bot']
+        tickets_collection = db['tickets']
+        users_collection = db['users']
+        
+        # Create indexes for better performance
+        tickets_collection.create_index('user_id')
+        tickets_collection.create_index('active')
+        users_collection.create_index('user_id', unique=True)
+        
+        logger.info("✅ MongoDB connected successfully!")
+        return True
+    except ConnectionFailure as e:
+        logger.error(f"❌ MongoDB connection failed: {e}")
+        return False
+    except Exception as e:
+        logger.error(f"❌ MongoDB initialization error: {e}")
+        return False
+
+def save_ticket(user_id, username, first_name, active=True):
+    """Save or update a ticket in MongoDB."""
+    if not tickets_collection:
+        return
+    
+    tickets_collection.update_one(
+        {'user_id': user_id},
+        {
+            '$set': {
+                'username': username,
+                'first_name': first_name,
+                'active': active,
+                'last_updated': datetime.utcnow()
+            },
+            '$setOnInsert': {
+                'created_at': datetime.utcnow(),
+                'messages': []
+            }
+        },
+        upsert=True
+    )
+
+def add_message_to_ticket(user_id, message_text, from_user='user'):
+    """Add a message to a ticket."""
+    if not tickets_collection:
+        return
+    
+    tickets_collection.update_one(
+        {'user_id': user_id},
+        {
+            '$push': {
+                'messages': {
+                    'text': message_text,
+                    'time': datetime.utcnow().strftime('%H:%M:%S'),
+                    'from': from_user
+                }
+            },
+            '$set': {
+                'last_updated': datetime.utcnow()
+            }
+        }
+    )
+
+def get_ticket(user_id):
+    """Get a ticket from MongoDB."""
+    if not tickets_collection:
+        return None
+    return tickets_collection.find_one({'user_id': user_id})
+
+def get_active_tickets():
+    """Get all active tickets."""
+    if not tickets_collection:
+        return []
+    return list(tickets_collection.find({'active': True}).sort('last_updated', -1))
+
+def close_ticket(user_id):
+    """Close a ticket."""
+    if not tickets_collection:
+        return
+    
+    tickets_collection.update_one(
+        {'user_id': user_id},
+        {
+            '$set': {
+                'active': False,
+                'closed_at': datetime.utcnow()
+            }
+        }
+    )
+
+def save_user(user_id, username, first_name, last_name=None):
+    """Save user information."""
+    if not users_collection:
+        return
+    
+    users_collection.update_one(
+        {'user_id': user_id},
+        {
+            '$set': {
+                'username': username,
+                'first_name': first_name,
+                'last_name': last_name,
+                'last_seen': datetime.utcnow()
+            },
+            '$setOnInsert': {
+                'joined_at': datetime.utcnow()
+            }
+        },
+        upsert=True
+    )
 
 # Helper function to notify admin
 async def notify_admin(context: ContextTypes.DEFAULT_TYPE, message: str):
@@ -33,6 +163,9 @@ async def notify_admin(context: ContextTypes.DEFAULT_TYPE, message: str):
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Send a message with 5 inline button options when the command /start is issued."""
     user = update.effective_user
+    
+    # Save user to database
+    save_user(user.id, user.username, user.first_name, user.last_name)
     
     # Log user ID for debugging
     logger.info(f"User {user.first_name} (ID: {user.id}) started the bot")
@@ -94,12 +227,16 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         # Set this user as the active reply target
         last_user_message[ADMIN_ID] = target_user_id
         
+        # Get user info from database
+        ticket = get_ticket(target_user_id)
+        user_name = ticket.get('first_name', 'User') if ticket else 'User'
+        
         await query.answer("✅ Quick reply mode activated!", show_alert=False)
         await query.edit_message_reply_markup(reply_markup=None)  # Remove buttons
         await context.bot.send_message(
             chat_id=ADMIN_ID,
             text=f"💬 Quick Reply Mode Activated\n\n"
-                 f"Replying to: {active_chats.get(target_user_id, {}).get('first_name', 'User')} (ID: {target_user_id})\n\n"
+                 f"Replying to: {user_name} (ID: {target_user_id})\n\n"
                  f"💡 Just type your message and send it!"
         )
         return
@@ -113,12 +250,14 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         # Extract user ID from callback data
         target_user_id = int(option.replace('close_ticket_', ''))
         
-        if target_user_id not in active_chats:
+        # Check if ticket exists
+        ticket = get_ticket(target_user_id)
+        if not ticket:
             await query.answer("❌ Ticket not found", show_alert=True)
             return
         
-        # Close the ticket
-        active_chats[target_user_id]['active'] = False
+        # Close the ticket in database
+        close_ticket(target_user_id)
         
         # Notify user
         try:
@@ -148,19 +287,20 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         # Extract user ID from callback data
         target_user_id = int(option.replace('view_history_', ''))
         
-        if target_user_id not in active_chats:
+        # Get ticket from database
+        ticket = get_ticket(target_user_id)
+        if not ticket:
             await query.answer("❌ Chat not found", show_alert=True)
             return
         
-        chat_data = active_chats[target_user_id]
-        messages = chat_data.get('messages', [])
+        messages = ticket.get('messages', [])
         
         if not messages:
             await query.answer("📭 No messages yet", show_alert=True)
             return
         
         # Build message history
-        history = f"📜 Chat History - {chat_data['first_name']}\n\n"
+        history = f"📜 Chat History - {ticket['first_name']}\n\n"
         for msg in messages[-10:]:  # Show last 10 messages
             sender = "👤 User" if msg['from'] == 'user' else "👨‍💼 You"
             history += f"{sender} ({msg['time']}): {msg['text']}\n\n"
@@ -186,12 +326,8 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     
     # Handle contact support
     if option == 'contact_support':
-        active_chats[user.id] = {
-            'username': user.username,
-            'first_name': user.first_name,
-            'active': True,
-            'messages': []
-        }
+        # Save ticket to database
+        save_ticket(user.id, user.username, user.first_name, active=True)
         
         await query.edit_message_text(
             text='💬 Support Chat Activated!\n\n'
@@ -238,13 +374,10 @@ async def handle_user_message(update: Update, context: ContextTypes.DEFAULT_TYPE
     message_text = update.message.text
     
     # Check if user has active support chat
-    if user.id in active_chats and active_chats[user.id]['active']:
-        # Store message
-        active_chats[user.id]['messages'].append({
-            'text': message_text,
-            'time': datetime.now().strftime('%H:%M:%S'),
-            'from': 'user'
-        })
+    ticket = get_ticket(user.id)
+    if ticket and ticket.get('active', False):
+        # Store message in database
+        add_message_to_ticket(user.id, message_text, from_user='user')
         
         # Store as last user who messaged (for quick reply)
         if ADMIN_ID:
@@ -298,17 +431,16 @@ async def handle_user_message(update: Update, context: ContextTypes.DEFAULT_TYPE
                     text=f"💬 Support Team Response:\n\n{message_text}"
                 )
                 
-                # Store in chat history
-                if target_user_id in active_chats:
-                    active_chats[target_user_id]['messages'].append({
-                        'text': message_text,
-                        'time': datetime.now().strftime('%H:%M:%S'),
-                        'from': 'admin'
-                    })
+                # Store in database
+                add_message_to_ticket(target_user_id, message_text, from_user='admin')
+                
+                # Get ticket info
+                ticket = get_ticket(target_user_id)
+                user_name = ticket.get('first_name', 'User') if ticket else 'User'
                 
                 await update.message.reply_text(
                     f"✅ Message sent to user {target_user_id}!\n"
-                    f"({active_chats.get(target_user_id, {}).get('first_name', 'User')})"
+                    f"({user_name})"
                 )
             except Exception as e:
                 await update.message.reply_text(
@@ -325,17 +457,22 @@ async def tickets_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         await update.message.reply_text("❌ This command is only for admins.")
         return
     
-    # Separate active and recent tickets
-    active_tickets = [(uid, data) for uid, data in active_chats.items() if data.get('active', False)]
+    # Get active tickets from database
+    active_tickets = get_active_tickets()
     
     if not active_tickets:
         await update.message.reply_text("📭 No active support tickets.")
         return
     
+    await update.message.reply_text(f"📋 Found {len(active_tickets)} active ticket(s)...")
+    
     # Show each ticket with action buttons
-    for user_id, chat_data in active_tickets:
+    for ticket in active_tickets:
+        user_id = ticket['user_id']
+        
         # Get last message from user
-        user_messages = [msg for msg in chat_data.get('messages', []) if msg.get('from') == 'user']
+        messages = ticket.get('messages', [])
+        user_messages = [msg for msg in messages if msg.get('from') == 'user']
         last_message = user_messages[-1]['text'] if user_messages else "No messages yet"
         last_message_preview = (last_message[:50] + '...') if len(last_message) > 50 else last_message
         
@@ -351,10 +488,10 @@ async def tickets_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         
         ticket_info = (
             f"🎫 Active Ticket\n\n"
-            f"👤 {chat_data['first_name']}\n"
+            f"👤 {ticket['first_name']}\n"
             f"🆔 ID: {user_id}\n"
-            f"📱 @{chat_data['username'] or 'No username'}\n"
-            f"💬 Total Messages: {len(chat_data['messages'])}\n"
+            f"📱 @{ticket.get('username') or 'No username'}\n"
+            f"💬 Total Messages: {len(messages)}\n"
             f"📝 Last Message: \"{last_message_preview}\"\n"
             f"{'─' * 30}"
         )
@@ -390,7 +527,8 @@ async def reply_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         return
     
     # Check if chat exists
-    if target_user_id not in active_chats:
+    ticket = get_ticket(target_user_id)
+    if not ticket:
         await update.message.reply_text("❌ No active chat with this user.")
         return
     
@@ -401,12 +539,8 @@ async def reply_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             text=f"💬 Support Team Response:\n\n{reply_text}"
         )
         
-        # Store in chat history
-        active_chats[target_user_id]['messages'].append({
-            'text': reply_text,
-            'time': datetime.now().strftime('%H:%M:%S'),
-            'from': 'admin'
-        })
+        # Store in database
+        add_message_to_ticket(target_user_id, reply_text, from_user='admin')
         
         await update.message.reply_text(f"✅ Message sent to user {target_user_id}!")
     except Exception as e:
@@ -434,12 +568,14 @@ async def close_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         await update.message.reply_text("❌ Invalid user ID. Must be a number.")
         return
     
-    if target_user_id not in active_chats:
+    # Check if ticket exists
+    ticket = get_ticket(target_user_id)
+    if not ticket:
         await update.message.reply_text("❌ No chat found with this user.")
         return
     
     # Close the ticket
-    active_chats[target_user_id]['active'] = False
+    close_ticket(target_user_id)
     
     # Notify user
     try:
@@ -454,7 +590,7 @@ async def close_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     
     await update.message.reply_text(
         f"✅ Ticket closed for user {target_user_id}\n"
-        f"({active_chats[target_user_id]['first_name']})"
+        f"({ticket['first_name']})"
     )
 
 # User command: Stop support chat
@@ -462,8 +598,9 @@ async def stop_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     """User can stop their support chat."""
     user = update.effective_user
     
-    if user.id in active_chats and active_chats[user.id]['active']:
-        active_chats[user.id]['active'] = False
+    ticket = get_ticket(user.id)
+    if ticket and ticket.get('active', False):
+        close_ticket(user.id)
         await update.message.reply_text(
             "✅ Support chat ended.\n"
             "Type /start to return to the main menu."
@@ -486,15 +623,22 @@ async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         await update.message.reply_text("❌ This command is only for admins.")
         return
     
-    total_chats = len(active_chats)
-    active_tickets = sum(1 for chat in active_chats.values() if chat['active'])
-    closed_tickets = total_chats - active_tickets
+    if not tickets_collection or not users_collection:
+        await update.message.reply_text("❌ Database not connected.")
+        return
+    
+    # Get statistics from database
+    total_users = users_collection.count_documents({})
+    total_tickets = tickets_collection.count_documents({})
+    active_tickets = tickets_collection.count_documents({'active': True})
+    closed_tickets = tickets_collection.count_documents({'active': False})
     
     message = (
         "📊 Bot Statistics\n\n"
-        f"👥 Total Users: {total_chats}\n"
-        f"🎫 Active Tickets: {active_tickets}\n"
-        f"✅ Closed Tickets: {closed_tickets}\n"
+        f"👥 Total Users: {total_users}\n"
+        f"🎫 Total Tickets: {total_tickets}\n"
+        f"✅ Active Tickets: {active_tickets}\n"
+        f"🔒 Closed Tickets: {closed_tickets}\n"
     )
     
     await update.message.reply_text(message)
@@ -526,6 +670,14 @@ def main() -> None:
         logger.error("Please add BOT_TOKEN to Railway environment variables")
         return
     
+    logger.info(f"✅ Bot token found (length: {len(token)} chars)")
+    
+    # Initialize MongoDB
+    if not init_mongodb():
+        logger.error("❌ Failed to connect to MongoDB. Bot will not start.")
+        logger.error("Please add MONGODB_URI to Railway environment variables")
+        return
+    
     # Get admin ID from environment variable
     admin_id_str = os.environ.get('ADMIN_ID')
     if admin_id_str:
@@ -537,8 +689,6 @@ def main() -> None:
     else:
         logger.warning("⚠️ ADMIN_ID not set - admin features will be disabled")
         logger.warning("To enable admin features, add ADMIN_ID environment variable")
-    
-    logger.info(f"✅ Bot token found (length: {len(token)} chars)")
     
     # Create the Application
     try:
@@ -565,6 +715,7 @@ def main() -> None:
     logger.info("📋 Available commands:")
     logger.info("   User: /start, /stop")
     logger.info("   Admin: /tickets, /reply, /close, /stats")
+    logger.info("💾 Database: MongoDB (Ready to handle 1000s of tickets!)")
     try:
         application.run_polling(allowed_updates=Update.ALL_TYPES)
     except Exception as e:
