@@ -1,12 +1,12 @@
 import os
 import logging
-import ssl
-import certifi
+import json
 from datetime import datetime
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes, MessageHandler, filters
-from pymongo import MongoClient
-from pymongo.errors import ConnectionFailure
+import psycopg2
+from psycopg2.extras import RealDictCursor
+from psycopg2 import pool
 
 # Enable logging
 logging.basicConfig(
@@ -18,153 +18,200 @@ logger = logging.getLogger(__name__)
 # Admin configuration - SET YOUR ADMIN TELEGRAM USER ID HERE
 ADMIN_ID = None  # Will be set from environment variable
 
-# MongoDB connection
-mongo_client = None
-db = None
-tickets_collection = None
-users_collection = None
+# PostgreSQL connection pool
+db_pool = None
 
 # Store last user who messaged admin (for quick reply)
 last_user_message = {}
 
 def init_database():
-    """Initialize MongoDB connection with proper SSL configuration."""
-    global mongo_client, db, tickets_collection, users_collection
+    """Initialize PostgreSQL connection."""
+    global db_pool
     
-    mongo_uri = os.environ.get('MONGODB_URI')
+    # Railway automatically sets DATABASE_URL when you add PostgreSQL
+    database_url = os.environ.get('DATABASE_URL')
     
-    if not mongo_uri:
-        logger.error("❌ MONGODB_URI environment variable not set!")
-        logger.error("Please add MONGODB_URI to Railway environment variables")
+    if not database_url:
+        logger.error("❌ DATABASE_URL environment variable not set!")
+        logger.error("Please add PostgreSQL database in Railway")
         return False
     
     try:
-        # Connect to MongoDB with proper TLS settings
-        mongo_client = MongoClient(
-            mongo_uri,
-            serverSelectionTimeoutMS=15000,
-            connectTimeoutMS=15000,
-            socketTimeoutMS=15000,
-            tlsAllowInvalidCertificates=True,
-            tlsAllowInvalidHostnames=True
+        # Create connection pool
+        db_pool = pool.SimpleConnectionPool(
+            1, 10,
+            database_url
         )
         
-        # Test connection
-        mongo_client.admin.command('ping')
-        logger.info("✅ MongoDB connection test successful!")
+        # Test connection and create tables
+        conn = db_pool.getconn()
+        cursor = conn.cursor()
         
-        db = mongo_client['telegram_bot']
-        tickets_collection = db['tickets']
-        users_collection = db['users']
+        # Create tickets table
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS tickets (
+                user_id BIGINT PRIMARY KEY,
+                username TEXT,
+                first_name TEXT,
+                last_name TEXT,
+                active BOOLEAN DEFAULT TRUE,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                closed_at TIMESTAMP,
+                messages JSONB DEFAULT '[]'::jsonb
+            )
+        ''')
         
-        # Create indexes for better performance
-        tickets_collection.create_index('user_id')
-        tickets_collection.create_index('active')
-        users_collection.create_index('user_id', unique=True)
+        # Create users table
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS users (
+                user_id BIGINT PRIMARY KEY,
+                username TEXT,
+                first_name TEXT,
+                last_name TEXT,
+                joined_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                last_seen TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
         
-        logger.info("✅ MongoDB connected successfully!")
-        logger.info(f"📊 Database: {db.name}")
-        logger.info("💾 Ready to handle 1000s of tickets!")
+        # Create indexes
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_tickets_active ON tickets(active)')
+        cursor.execute('CREATE INDEX IF NOT EXISTS idx_tickets_updated ON tickets(last_updated DESC)')
+        
+        conn.commit()
+        cursor.close()
+        db_pool.putconn(conn)
+        
+        logger.info("✅ PostgreSQL connected successfully!")
+        logger.info("💾 Database: Ready to handle 100,000+ tickets!")
         return True
-    except ConnectionFailure as e:
-        logger.error(f"❌ MongoDB connection failed: {e}")
-        logger.error("💡 Tip: Check Network Access in MongoDB Atlas (allow 0.0.0.0/0)")
-        return False
     except Exception as e:
-        logger.error(f"❌ MongoDB initialization error: {e}")
+        logger.error(f"❌ PostgreSQL initialization error: {e}")
         return False
 
 def save_ticket(user_id, username, first_name, last_name=None, active=True):
-    """Save or update a ticket in MongoDB."""
-    if not tickets_collection:
+    """Save or update a ticket in PostgreSQL."""
+    if not db_pool:
         return
     
-    tickets_collection.update_one(
-        {'user_id': user_id},
-        {
-            '$set': {
-                'username': username,
-                'first_name': first_name,
-                'last_name': last_name,
-                'active': active,
-                'last_updated': datetime.utcnow()
-            },
-            '$setOnInsert': {
-                'created_at': datetime.utcnow(),
-                'messages': []
-            }
-        },
-        upsert=True
-    )
+    conn = db_pool.getconn()
+    try:
+        cursor = conn.cursor()
+        cursor.execute('''
+            INSERT INTO tickets (user_id, username, first_name, last_name, active, last_updated)
+            VALUES (%s, %s, %s, %s, %s, CURRENT_TIMESTAMP)
+            ON CONFLICT (user_id) DO UPDATE SET
+                username = EXCLUDED.username,
+                first_name = EXCLUDED.first_name,
+                last_name = EXCLUDED.last_name,
+                active = EXCLUDED.active,
+                last_updated = CURRENT_TIMESTAMP
+        ''', (user_id, username, first_name, last_name, active))
+        conn.commit()
+        cursor.close()
+    finally:
+        db_pool.putconn(conn)
 
 def add_message_to_ticket(user_id, message_text, from_user='user'):
     """Add a message to a ticket."""
-    if not tickets_collection:
+    if not db_pool:
         return
     
-    tickets_collection.update_one(
-        {'user_id': user_id},
-        {
-            '$push': {
-                'messages': {
-                    'text': message_text,
-                    'time': datetime.utcnow().strftime('%H:%M:%S'),
-                    'from': from_user
-                }
-            },
-            '$set': {
-                'last_updated': datetime.utcnow()
-            }
-        }
-    )
+    conn = db_pool.getconn()
+    try:
+        cursor = conn.cursor()
+        time_now = datetime.utcnow().strftime('%H:%M:%S')
+        message_obj = json.dumps({'text': message_text, 'time': time_now, 'from': from_user})
+        
+        cursor.execute('''
+            UPDATE tickets 
+            SET messages = messages || %s::jsonb,
+                last_updated = CURRENT_TIMESTAMP
+            WHERE user_id = %s
+        ''', (message_obj, user_id))
+        conn.commit()
+        cursor.close()
+    finally:
+        db_pool.putconn(conn)
 
 def get_ticket(user_id):
-    """Get a ticket from MongoDB."""
-    if not tickets_collection:
+    """Get a ticket from PostgreSQL."""
+    if not db_pool:
         return None
-    return tickets_collection.find_one({'user_id': user_id})
+    
+    conn = db_pool.getconn()
+    try:
+        cursor = conn.cursor(cursor_factory=RealDictCursor)
+        cursor.execute('''
+            SELECT user_id, username, first_name, last_name, active, 
+                   created_at, last_updated, closed_at, messages
+            FROM tickets WHERE user_id = %s
+        ''', (user_id,))
+        ticket = cursor.fetchone()
+        cursor.close()
+        return dict(ticket) if ticket else None
+    finally:
+        db_pool.putconn(conn)
 
 def get_active_tickets():
     """Get all active tickets."""
-    if not tickets_collection:
+    if not db_pool:
         return []
-    return list(tickets_collection.find({'active': True}).sort('last_updated', -1))
+    
+    conn = db_pool.getconn()
+    try:
+        cursor = conn.cursor(cursor_factory=RealDictCursor)
+        cursor.execute('''
+            SELECT user_id, username, first_name, last_name, active,
+                   created_at, last_updated, messages
+            FROM tickets WHERE active = TRUE
+            ORDER BY last_updated DESC
+        ''')
+        tickets = cursor.fetchall()
+        cursor.close()
+        return [dict(t) for t in tickets]
+    finally:
+        db_pool.putconn(conn)
 
 def close_ticket(user_id):
     """Close a ticket."""
-    if not tickets_collection:
+    if not db_pool:
         return
     
-    tickets_collection.update_one(
-        {'user_id': user_id},
-        {
-            '$set': {
-                'active': False,
-                'closed_at': datetime.utcnow()
-            }
-        }
-    )
+    conn = db_pool.getconn()
+    try:
+        cursor = conn.cursor()
+        cursor.execute('''
+            UPDATE tickets 
+            SET active = FALSE, closed_at = CURRENT_TIMESTAMP
+            WHERE user_id = %s
+        ''', (user_id,))
+        conn.commit()
+        cursor.close()
+    finally:
+        db_pool.putconn(conn)
 
 def save_user(user_id, username, first_name, last_name=None):
     """Save user information."""
-    if not users_collection:
+    if not db_pool:
         return
     
-    users_collection.update_one(
-        {'user_id': user_id},
-        {
-            '$set': {
-                'username': username,
-                'first_name': first_name,
-                'last_name': last_name,
-                'last_seen': datetime.utcnow()
-            },
-            '$setOnInsert': {
-                'joined_at': datetime.utcnow()
-            }
-        },
-        upsert=True
-    )
+    conn = db_pool.getconn()
+    try:
+        cursor = conn.cursor()
+        cursor.execute('''
+            INSERT INTO users (user_id, username, first_name, last_name, last_seen)
+            VALUES (%s, %s, %s, %s, CURRENT_TIMESTAMP)
+            ON CONFLICT (user_id) DO UPDATE SET
+                username = EXCLUDED.username,
+                first_name = EXCLUDED.first_name,
+                last_name = EXCLUDED.last_name,
+                last_seen = CURRENT_TIMESTAMP
+        ''', (user_id, username, first_name, last_name))
+        conn.commit()
+        cursor.close()
+    finally:
+        db_pool.putconn(conn)
 
 # Helper function to notify admin
 async def notify_admin(context: ContextTypes.DEFAULT_TYPE, message: str):
@@ -639,25 +686,39 @@ async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         await update.message.reply_text("❌ This command is only for admins.")
         return
     
-    if not tickets_collection or not users_collection:
+    if not db_pool:
         await update.message.reply_text("❌ Database not connected.")
         return
     
-    # Get statistics from database
-    total_users = users_collection.count_documents({})
-    total_tickets = tickets_collection.count_documents({})
-    active_tickets = tickets_collection.count_documents({'active': True})
-    closed_tickets = tickets_collection.count_documents({'active': False})
-    
-    message = (
-        "📊 Bot Statistics\n\n"
-        f"👥 Total Users: {total_users}\n"
-        f"🎫 Total Tickets: {total_tickets}\n"
-        f"✅ Active Tickets: {active_tickets}\n"
-        f"🔒 Closed Tickets: {closed_tickets}\n"
-    )
-    
-    await update.message.reply_text(message)
+    conn = db_pool.getconn()
+    try:
+        cursor = conn.cursor()
+        
+        cursor.execute("SELECT COUNT(*) FROM users")
+        total_users = cursor.fetchone()[0]
+        
+        cursor.execute("SELECT COUNT(*) FROM tickets")
+        total_tickets = cursor.fetchone()[0]
+        
+        cursor.execute("SELECT COUNT(*) FROM tickets WHERE active = TRUE")
+        active_tickets = cursor.fetchone()[0]
+        
+        cursor.execute("SELECT COUNT(*) FROM tickets WHERE active = FALSE")
+        closed_tickets = cursor.fetchone()[0]
+        
+        cursor.close()
+        
+        message = (
+            "📊 Bot Statistics\n\n"
+            f"👥 Total Users: {total_users}\n"
+            f"🎫 Total Tickets: {total_tickets}\n"
+            f"✅ Active Tickets: {active_tickets}\n"
+            f"🔒 Closed Tickets: {closed_tickets}\n"
+        )
+        
+        await update.message.reply_text(message)
+    finally:
+        db_pool.putconn(conn)
 
 # Command to get your own user ID
 async def myid_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
