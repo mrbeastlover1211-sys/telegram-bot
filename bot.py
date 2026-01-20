@@ -37,9 +37,19 @@ def init_mongodb():
         return False
     
     try:
-        mongo_client = MongoClient(mongo_uri, serverSelectionTimeoutMS=5000)
+        # Add SSL/TLS settings for compatibility
+        mongo_client = MongoClient(
+            mongo_uri,
+            serverSelectionTimeoutMS=10000,
+            connectTimeoutMS=10000,
+            socketTimeoutMS=10000,
+            tls=True,
+            tlsAllowInvalidCertificates=True  # For compatibility with some Python environments
+        )
+        
         # Test connection
         mongo_client.admin.command('ping')
+        logger.info("✅ MongoDB connection test successful!")
         
         db = mongo_client['telegram_bot']
         tickets_collection = db['tickets']
@@ -51,6 +61,7 @@ def init_mongodb():
         users_collection.create_index('user_id', unique=True)
         
         logger.info("✅ MongoDB connected successfully!")
+        logger.info(f"📊 Database: {db.name}")
         return True
     except ConnectionFailure as e:
         logger.error(f"❌ MongoDB connection failed: {e}")
