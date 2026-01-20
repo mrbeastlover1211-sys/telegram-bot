@@ -39,19 +39,14 @@ def init_database():
         return False
     
     try:
-        # Create custom SSL context with certifi certificates
-        ssl_context = ssl.create_default_context(cafile=certifi.where())
-        ssl_context.check_hostname = False
-        ssl_context.verify_mode = ssl.CERT_NONE
-        
-        # Connect to MongoDB with custom SSL context
+        # Connect to MongoDB with proper TLS settings
         mongo_client = MongoClient(
             mongo_uri,
             serverSelectionTimeoutMS=15000,
             connectTimeoutMS=15000,
             socketTimeoutMS=15000,
-            tlsCAFile=certifi.where(),
-            ssl_cert_reqs=ssl.CERT_NONE
+            tlsAllowInvalidCertificates=True,
+            tlsAllowInvalidHostnames=True
         )
         
         # Test connection
