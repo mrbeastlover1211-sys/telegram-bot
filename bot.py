@@ -233,15 +233,19 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     # Log user ID for debugging
     logger.info(f"User {user.first_name} (ID: {user.id}) started the bot")
     
-    # Notify admin of new user
-    await notify_admin(
-        context,
-        f"🆕 New User Started Bot\n"
-        f"👤 Name: {user.first_name} {user.last_name or ''}\n"
-        f"🆔 ID: {user.id}\n"
-        f"📱 Username: @{user.username or 'No username'}\n"
-        f"🕐 Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
-    )
+    # Check if user is admin
+    is_admin = (user.id == ADMIN_ID)
+    
+    # Notify admin of new user (if not the admin themselves)
+    if not is_admin:
+        await notify_admin(
+            context,
+            f"🆕 New User Started Bot\n"
+            f"👤 Name: {user.first_name} {user.last_name or ''}\n"
+            f"🆔 ID: {user.id}\n"
+            f"📱 Username: @{user.username or 'No username'}\n"
+            f"🕐 Time: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}"
+        )
     
     # Show user their ID if admin not set
     if not ADMIN_ID:
@@ -250,24 +254,42 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             f"Your User ID: {user.id}\n\n"
             f"If you're the admin, add this ID to Railway as ADMIN_ID variable."
         )
+        return
     
-    # Create inline keyboard with 5 options + Contact Support
-    keyboard = [
-        [InlineKeyboardButton("🎮 Option 1", callback_data='option_1')],
-        [InlineKeyboardButton("🎯 Option 2", callback_data='option_2')],
-        [InlineKeyboardButton("🎲 Option 3", callback_data='option_3')],
-        [InlineKeyboardButton("🏆 Option 4", callback_data='option_4')],
-        [InlineKeyboardButton("⚡ Option 5", callback_data='option_5')],
-        [InlineKeyboardButton("💬 Contact Support", callback_data='contact_support')],
-    ]
-    
-    reply_markup = InlineKeyboardMarkup(keyboard)
-    
-    await update.message.reply_text(
-        f'👋 Welcome {user.first_name}!\n\n'
-        f'🎮 Choose one of the options below to continue:',
-        reply_markup=reply_markup
-    )
+    # Admin gets special admin panel
+    if is_admin:
+        keyboard = [
+            [InlineKeyboardButton("🎫 View Tickets", callback_data='admin_tickets')],
+            [InlineKeyboardButton("📊 Statistics", callback_data='admin_stats')],
+            [InlineKeyboardButton("👥 All Users", callback_data='admin_users')],
+            [InlineKeyboardButton("🔔 Notifications: ON", callback_data='admin_notif')],
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await update.message.reply_text(
+            f'👨‍💼 Admin Panel\n\n'
+            f'Welcome back, {user.first_name}!\n'
+            f'Choose an action below:',
+            reply_markup=reply_markup
+        )
+    else:
+        # Regular users get normal menu
+        keyboard = [
+            [InlineKeyboardButton("🎮 Option 1", callback_data='option_1')],
+            [InlineKeyboardButton("🎯 Option 2", callback_data='option_2')],
+            [InlineKeyboardButton("🎲 Option 3", callback_data='option_3')],
+            [InlineKeyboardButton("🏆 Option 4", callback_data='option_4')],
+            [InlineKeyboardButton("⚡ Option 5", callback_data='option_5')],
+            [InlineKeyboardButton("💬 Contact Support", callback_data='contact_support')],
+        ]
+        
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await update.message.reply_text(
+            f'👋 Welcome {user.first_name}!\n\n'
+            f'🎮 Choose one of the options below to continue:',
+            reply_markup=reply_markup
+        )
 
 # Button click handler
 async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -277,6 +299,79 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     
     user = query.from_user
     option = query.data
+    
+    # Handle Admin Panel buttons
+    if option == 'admin_tickets':
+        if user.id != ADMIN_ID:
+            await query.answer("❌ Only admin can use this", show_alert=True)
+            return
+        
+        await query.answer()
+        # Call the tickets command function
+        await tickets_command(update, context)
+        return
+    
+    if option == 'admin_stats':
+        if user.id != ADMIN_ID:
+            await query.answer("❌ Only admin can use this", show_alert=True)
+            return
+        
+        await query.answer()
+        # Call the stats command function
+        await stats_command(update, context)
+        return
+    
+    if option == 'admin_users':
+        if user.id != ADMIN_ID:
+            await query.answer("❌ Only admin can use this", show_alert=True)
+            return
+        
+        await query.answer()
+        
+        # Get all users from database
+        if not db_pool:
+            await query.message.reply_text("❌ Database not connected.")
+            return
+        
+        conn = db_pool.getconn()
+        try:
+            cursor = conn.cursor(cursor_factory=RealDictCursor)
+            cursor.execute('''
+                SELECT user_id, username, first_name, last_name, 
+                       joined_at, last_seen
+                FROM users
+                ORDER BY last_seen DESC
+                LIMIT 20
+            ''')
+            users = cursor.fetchall()
+            cursor.close()
+            
+            if not users:
+                await query.message.reply_text("📭 No users found.")
+                return
+            
+            message = f"👥 Recent Users (Last 20)\n\n"
+            for u in users:
+                message += (
+                    f"👤 {u['first_name']} {u.get('last_name') or ''}\n"
+                    f"🆔 ID: {u['user_id']}\n"
+                    f"📱 @{u.get('username') or 'No username'}\n"
+                    f"🕐 Last seen: {u['last_seen'].strftime('%Y-%m-%d %H:%M') if u.get('last_seen') else 'Never'}\n"
+                    f"{'─' * 25}\n"
+                )
+            
+            await context.bot.send_message(chat_id=ADMIN_ID, text=message)
+        finally:
+            db_pool.putconn(conn)
+        return
+    
+    if option == 'admin_notif':
+        if user.id != ADMIN_ID:
+            await query.answer("❌ Only admin can use this", show_alert=True)
+            return
+        
+        await query.answer("Notifications are always ON for admins", show_alert=True)
+        return
     
     # Handle Quick Reply button
     if option.startswith('quick_reply_'):
