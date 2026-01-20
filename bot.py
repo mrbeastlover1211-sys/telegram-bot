@@ -1,10 +1,12 @@
 import os
 import logging
-import sqlite3
-import json
+import ssl
+import certifi
 from datetime import datetime
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Application, CommandHandler, CallbackQueryHandler, ContextTypes, MessageHandler, filters
+from pymongo import MongoClient
+from pymongo.errors import ConnectionFailure
 
 # Enable logging
 logging.basicConfig(
@@ -16,188 +18,158 @@ logger = logging.getLogger(__name__)
 # Admin configuration - SET YOUR ADMIN TELEGRAM USER ID HERE
 ADMIN_ID = None  # Will be set from environment variable
 
-# SQLite database connection
-db_connection = None
+# MongoDB connection
+mongo_client = None
+db = None
+tickets_collection = None
+users_collection = None
 
 # Store last user who messaged admin (for quick reply)
 last_user_message = {}
 
 def init_database():
-    """Initialize SQLite database."""
-    global db_connection
+    """Initialize MongoDB connection with proper SSL configuration."""
+    global mongo_client, db, tickets_collection, users_collection
+    
+    mongo_uri = os.environ.get('MONGODB_URI')
+    
+    if not mongo_uri:
+        logger.error("❌ MONGODB_URI environment variable not set!")
+        logger.error("Please add MONGODB_URI to Railway environment variables")
+        return False
     
     try:
-        # Create database file
-        db_connection = sqlite3.connect('telegram_bot.db', check_same_thread=False)
-        cursor = db_connection.cursor()
+        # Create custom SSL context with certifi certificates
+        ssl_context = ssl.create_default_context(cafile=certifi.where())
+        ssl_context.check_hostname = False
+        ssl_context.verify_mode = ssl.CERT_NONE
         
-        # Create tickets table
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS tickets (
-                user_id INTEGER PRIMARY KEY,
-                username TEXT,
-                first_name TEXT,
-                last_name TEXT,
-                active INTEGER DEFAULT 1,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                closed_at TIMESTAMP
-            )
-        ''')
+        # Connect to MongoDB with custom SSL context
+        mongo_client = MongoClient(
+            mongo_uri,
+            serverSelectionTimeoutMS=15000,
+            connectTimeoutMS=15000,
+            socketTimeoutMS=15000,
+            tlsCAFile=certifi.where(),
+            ssl_cert_reqs=ssl.CERT_NONE
+        )
         
-        # Create messages table
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS messages (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                user_id INTEGER,
-                text TEXT,
-                time TEXT,
-                from_user TEXT,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                FOREIGN KEY (user_id) REFERENCES tickets(user_id)
-            )
-        ''')
+        # Test connection
+        mongo_client.admin.command('ping')
+        logger.info("✅ MongoDB connection test successful!")
         
-        # Create users table
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS users (
-                user_id INTEGER PRIMARY KEY,
-                username TEXT,
-                first_name TEXT,
-                last_name TEXT,
-                joined_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                last_seen TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )
-        ''')
+        db = mongo_client['telegram_bot']
+        tickets_collection = db['tickets']
+        users_collection = db['users']
         
-        db_connection.commit()
-        logger.info("✅ SQLite database initialized successfully!")
-        logger.info("💾 Database: telegram_bot.db (Ready to handle 10,000+ tickets!)")
+        # Create indexes for better performance
+        tickets_collection.create_index('user_id')
+        tickets_collection.create_index('active')
+        users_collection.create_index('user_id', unique=True)
+        
+        logger.info("✅ MongoDB connected successfully!")
+        logger.info(f"📊 Database: {db.name}")
+        logger.info("💾 Ready to handle 1000s of tickets!")
         return True
+    except ConnectionFailure as e:
+        logger.error(f"❌ MongoDB connection failed: {e}")
+        logger.error("💡 Tip: Check Network Access in MongoDB Atlas (allow 0.0.0.0/0)")
+        return False
     except Exception as e:
-        logger.error(f"❌ Database initialization error: {e}")
+        logger.error(f"❌ MongoDB initialization error: {e}")
         return False
 
 def save_ticket(user_id, username, first_name, last_name=None, active=True):
-    """Save or update a ticket in SQLite."""
-    if not db_connection:
+    """Save or update a ticket in MongoDB."""
+    if not tickets_collection:
         return
     
-    cursor = db_connection.cursor()
-    cursor.execute('''
-        INSERT OR REPLACE INTO tickets (user_id, username, first_name, last_name, active, last_updated)
-        VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
-    ''', (user_id, username, first_name, last_name, 1 if active else 0))
-    db_connection.commit()
+    tickets_collection.update_one(
+        {'user_id': user_id},
+        {
+            '$set': {
+                'username': username,
+                'first_name': first_name,
+                'last_name': last_name,
+                'active': active,
+                'last_updated': datetime.utcnow()
+            },
+            '$setOnInsert': {
+                'created_at': datetime.utcnow(),
+                'messages': []
+            }
+        },
+        upsert=True
+    )
 
 def add_message_to_ticket(user_id, message_text, from_user='user'):
     """Add a message to a ticket."""
-    if not db_connection:
+    if not tickets_collection:
         return
     
-    cursor = db_connection.cursor()
-    time_now = datetime.now().strftime('%H:%M:%S')
-    cursor.execute('''
-        INSERT INTO messages (user_id, text, time, from_user)
-        VALUES (?, ?, ?, ?)
-    ''', (user_id, message_text, time_now, from_user))
-    
-    # Update ticket last_updated
-    cursor.execute('''
-        UPDATE tickets SET last_updated = CURRENT_TIMESTAMP WHERE user_id = ?
-    ''', (user_id,))
-    
-    db_connection.commit()
+    tickets_collection.update_one(
+        {'user_id': user_id},
+        {
+            '$push': {
+                'messages': {
+                    'text': message_text,
+                    'time': datetime.utcnow().strftime('%H:%M:%S'),
+                    'from': from_user
+                }
+            },
+            '$set': {
+                'last_updated': datetime.utcnow()
+            }
+        }
+    )
 
 def get_ticket(user_id):
-    """Get a ticket from SQLite."""
-    if not db_connection:
+    """Get a ticket from MongoDB."""
+    if not tickets_collection:
         return None
-    
-    cursor = db_connection.cursor()
-    cursor.execute('''
-        SELECT user_id, username, first_name, last_name, active, created_at, last_updated, closed_at
-        FROM tickets WHERE user_id = ?
-    ''', (user_id,))
-    
-    row = cursor.fetchone()
-    if not row:
-        return None
-    
-    # Get messages for this ticket
-    cursor.execute('''
-        SELECT text, time, from_user FROM messages WHERE user_id = ? ORDER BY created_at
-    ''', (user_id,))
-    messages = [{'text': msg[0], 'time': msg[1], 'from': msg[2]} for msg in cursor.fetchall()]
-    
-    return {
-        'user_id': row[0],
-        'username': row[1],
-        'first_name': row[2],
-        'last_name': row[3],
-        'active': bool(row[4]),
-        'created_at': row[5],
-        'last_updated': row[6],
-        'closed_at': row[7],
-        'messages': messages
-    }
+    return tickets_collection.find_one({'user_id': user_id})
 
 def get_active_tickets():
     """Get all active tickets."""
-    if not db_connection:
+    if not tickets_collection:
         return []
-    
-    cursor = db_connection.cursor()
-    cursor.execute('''
-        SELECT user_id, username, first_name, last_name, active, created_at, last_updated
-        FROM tickets WHERE active = 1 ORDER BY last_updated DESC
-    ''')
-    
-    tickets = []
-    for row in cursor.fetchall():
-        user_id = row[0]
-        
-        # Get messages for this ticket
-        cursor.execute('''
-            SELECT text, time, from_user FROM messages WHERE user_id = ? ORDER BY created_at
-        ''', (user_id,))
-        messages = [{'text': msg[0], 'time': msg[1], 'from': msg[2]} for msg in cursor.fetchall()]
-        
-        tickets.append({
-            'user_id': user_id,
-            'username': row[1],
-            'first_name': row[2],
-            'last_name': row[3],
-            'active': bool(row[4]),
-            'created_at': row[5],
-            'last_updated': row[6],
-            'messages': messages
-        })
-    
-    return tickets
+    return list(tickets_collection.find({'active': True}).sort('last_updated', -1))
 
 def close_ticket(user_id):
     """Close a ticket."""
-    if not db_connection:
+    if not tickets_collection:
         return
     
-    cursor = db_connection.cursor()
-    cursor.execute('''
-        UPDATE tickets SET active = 0, closed_at = CURRENT_TIMESTAMP WHERE user_id = ?
-    ''', (user_id,))
-    db_connection.commit()
+    tickets_collection.update_one(
+        {'user_id': user_id},
+        {
+            '$set': {
+                'active': False,
+                'closed_at': datetime.utcnow()
+            }
+        }
+    )
 
 def save_user(user_id, username, first_name, last_name=None):
     """Save user information."""
-    if not db_connection:
+    if not users_collection:
         return
     
-    cursor = db_connection.cursor()
-    cursor.execute('''
-        INSERT OR REPLACE INTO users (user_id, username, first_name, last_name, last_seen)
-        VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
-    ''', (user_id, username, first_name, last_name))
-    db_connection.commit()
+    users_collection.update_one(
+        {'user_id': user_id},
+        {
+            '$set': {
+                'username': username,
+                'first_name': first_name,
+                'last_name': last_name,
+                'last_seen': datetime.utcnow()
+            },
+            '$setOnInsert': {
+                'joined_at': datetime.utcnow()
+            }
+        },
+        upsert=True
+    )
 
 # Helper function to notify admin
 async def notify_admin(context: ContextTypes.DEFAULT_TYPE, message: str):
@@ -672,24 +644,15 @@ async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         await update.message.reply_text("❌ This command is only for admins.")
         return
     
-    if not db_connection:
+    if not tickets_collection or not users_collection:
         await update.message.reply_text("❌ Database not connected.")
         return
     
     # Get statistics from database
-    cursor = db_connection.cursor()
-    
-    cursor.execute("SELECT COUNT(*) FROM users")
-    total_users = cursor.fetchone()[0]
-    
-    cursor.execute("SELECT COUNT(*) FROM tickets")
-    total_tickets = cursor.fetchone()[0]
-    
-    cursor.execute("SELECT COUNT(*) FROM tickets WHERE active = 1")
-    active_tickets = cursor.fetchone()[0]
-    
-    cursor.execute("SELECT COUNT(*) FROM tickets WHERE active = 0")
-    closed_tickets = cursor.fetchone()[0]
+    total_users = users_collection.count_documents({})
+    total_tickets = tickets_collection.count_documents({})
+    active_tickets = tickets_collection.count_documents({'active': True})
+    closed_tickets = tickets_collection.count_documents({'active': False})
     
     message = (
         "📊 Bot Statistics\n\n"
