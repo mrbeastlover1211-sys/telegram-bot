@@ -1275,11 +1275,33 @@ def main() -> None:
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_user_message))
     logger.info("✅ Handlers registered")
     
+    # Set bot commands menu
+    async def set_commands():
+        try:
+            from telegram import BotCommand
+            commands = [
+                BotCommand("start", "🏠 Open main menu / Admin panel"),
+                BotCommand("search", "🔍 Search tickets (name/username/ID)"),
+                BotCommand("tickets", "🎫 View all active tickets"),
+                BotCommand("stats", "📊 View bot statistics"),
+                BotCommand("reply", "💬 Reply to user (use: /reply ID message)"),
+                BotCommand("close", "🔒 Close ticket (use: /close ID)"),
+                BotCommand("myid", "🆔 Get your Telegram user ID"),
+            ]
+            await application.bot.set_my_commands(commands)
+            logger.info("✅ Bot commands menu set")
+        except Exception as e:
+            logger.error(f"⚠️ Failed to set commands menu: {e}")
+    
     # Start the bot
     logger.info("🚀 Bot is starting polling...")
     logger.info("📋 Available commands:")
     logger.info("   User: /start, /stop")
     logger.info("   Admin: /search, /tickets, /reply, /close, /stats")
+    
+    # Set commands on startup
+    application.job_queue.run_once(lambda context: set_commands(), when=1)
+    
     try:
         application.run_polling(allowed_updates=Update.ALL_TYPES)
     except Exception as e:
