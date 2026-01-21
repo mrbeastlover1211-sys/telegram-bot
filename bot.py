@@ -259,10 +259,10 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     # Admin gets special admin panel
     if is_admin:
         keyboard = [
-            [InlineKeyboardButton("🎫 View Tickets", callback_data='admin_tickets')],
+            [InlineKeyboardButton("🎫 Active Tickets", callback_data='admin_tickets')],
+            [InlineKeyboardButton("🚀 Quick Close Dashboard", callback_data='admin_quick_close')],
             [InlineKeyboardButton("📊 Statistics", callback_data='admin_stats')],
             [InlineKeyboardButton("👥 All Users", callback_data='admin_users')],
-            [InlineKeyboardButton("🔔 Notifications: ON", callback_data='admin_notif')],
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
         
@@ -452,12 +452,68 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             db_pool.putconn(conn)
         return
     
-    if option == 'admin_notif':
+    if option == 'admin_quick_close':
         if user.id != ADMIN_ID:
             await query.answer("❌ Only admin can use this", show_alert=True)
             return
         
-        await query.answer("Notifications are always ON for admins", show_alert=True)
+        await query.answer("Loading dashboard...", show_alert=False)
+        
+        # Get active tickets from database
+        active_tickets = get_active_tickets()
+        
+        if not active_tickets:
+            await context.bot.send_message(
+                chat_id=ADMIN_ID,
+                text="📭 No open tickets! All clear! ✅"
+            )
+            return
+        
+        # Show compact dashboard with one-click close buttons
+        message = f"🚀 Quick Close Dashboard\n\n"
+        message += f"📊 {len(active_tickets)} Open Ticket(s)\n"
+        message += f"{'═' * 30}\n\n"
+        
+        keyboard = []
+        
+        for ticket in active_tickets[:10]:  # Show max 10 tickets
+            user_id = ticket['user_id']
+            first_name = ticket['first_name']
+            username = ticket.get('username', 'no_username')
+            messages = ticket.get('messages', [])
+            msg_count = len(messages)
+            
+            # Get last message preview
+            user_messages = [msg for msg in messages if msg.get('from') == 'user']
+            last_msg = user_messages[-1]['text'][:30] + '...' if user_messages and len(user_messages[-1]['text']) > 30 else (user_messages[-1]['text'] if user_messages else "No messages")
+            
+            message += f"👤 {first_name} (@{username})\n"
+            message += f"   💬 {msg_count} msgs | Last: \"{last_msg}\"\n\n"
+            
+            # Add close button for each ticket
+            keyboard.append([
+                InlineKeyboardButton(
+                    f"✅ Close {first_name}'s Ticket", 
+                    callback_data=f'quick_close_{user_id}'
+                )
+            ])
+        
+        # Add refresh and view all buttons
+        keyboard.append([
+            InlineKeyboardButton("🔄 Refresh", callback_data='admin_quick_close'),
+            InlineKeyboardButton("📋 View Details", callback_data='admin_tickets')
+        ])
+        
+        if len(active_tickets) > 10:
+            message += f"\n⚠️ Showing first 10 of {len(active_tickets)} tickets"
+        
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await context.bot.send_message(
+            chat_id=ADMIN_ID,
+            text=message,
+            reply_markup=reply_markup
+        )
         return
     
     # Handle Quick Reply button
@@ -484,6 +540,98 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                  f"Replying to: {user_name} (ID: {target_user_id})\n\n"
                  f"💡 Just type your message and send it!"
         )
+        return
+    
+    # Handle Quick Close button (from dashboard)
+    if option.startswith('quick_close_'):
+        if user.id != ADMIN_ID:
+            await query.answer("❌ Only admin can use this button", show_alert=True)
+            return
+        
+        # Extract user ID from callback data
+        target_user_id = int(option.replace('quick_close_', ''))
+        
+        # Check if ticket exists
+        ticket = get_ticket(target_user_id)
+        if not ticket:
+            await query.answer("❌ Ticket not found", show_alert=True)
+            return
+        
+        # Close the ticket in database
+        close_ticket(target_user_id)
+        
+        # Notify user
+        try:
+            await context.bot.send_message(
+                chat_id=target_user_id,
+                text="✅ Your support ticket has been closed.\n"
+                     "Thank you for contacting us!\n\n"
+                     "Type /start if you need help again."
+            )
+        except Exception as e:
+            logger.error(f"Failed to notify user of ticket closure: {e}")
+        
+        await query.answer(f"✅ Closed {ticket['first_name']}'s ticket!", show_alert=True)
+        
+        # Update the dashboard by editing the message
+        # Get updated active tickets
+        active_tickets = get_active_tickets()
+        
+        if not active_tickets:
+            await query.edit_message_text(
+                text="📭 No open tickets! All clear! ✅"
+            )
+            return
+        
+        # Rebuild dashboard
+        message = f"🚀 Quick Close Dashboard\n\n"
+        message += f"📊 {len(active_tickets)} Open Ticket(s)\n"
+        message += f"{'═' * 30}\n\n"
+        
+        keyboard = []
+        
+        for ticket in active_tickets[:10]:
+            user_id = ticket['user_id']
+            first_name = ticket['first_name']
+            username = ticket.get('username', 'no_username')
+            messages = ticket.get('messages', [])
+            msg_count = len(messages)
+            
+            user_messages = [msg for msg in messages if msg.get('from') == 'user']
+            last_msg = user_messages[-1]['text'][:30] + '...' if user_messages and len(user_messages[-1]['text']) > 30 else (user_messages[-1]['text'] if user_messages else "No messages")
+            
+            message += f"👤 {first_name} (@{username})\n"
+            message += f"   💬 {msg_count} msgs | Last: \"{last_msg}\"\n\n"
+            
+            keyboard.append([
+                InlineKeyboardButton(
+                    f"✅ Close {first_name}'s Ticket", 
+                    callback_data=f'quick_close_{user_id}'
+                )
+            ])
+        
+        keyboard.append([
+            InlineKeyboardButton("🔄 Refresh", callback_data='admin_quick_close'),
+            InlineKeyboardButton("📋 View Details", callback_data='admin_tickets')
+        ])
+        
+        if len(active_tickets) > 10:
+            message += f"\n⚠️ Showing first 10 of {len(active_tickets)} tickets"
+        
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        try:
+            await query.edit_message_text(
+                text=message,
+                reply_markup=reply_markup
+            )
+        except:
+            # If edit fails, send new message
+            await context.bot.send_message(
+                chat_id=ADMIN_ID,
+                text=message,
+                reply_markup=reply_markup
+            )
         return
     
     # Handle Close Ticket button
