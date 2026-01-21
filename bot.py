@@ -306,9 +306,58 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             await query.answer("❌ Only admin can use this", show_alert=True)
             return
         
-        await query.answer()
-        # Call the tickets command function
-        await tickets_command(update, context)
+        await query.answer("Loading tickets...", show_alert=False)
+        
+        # Get active tickets from database
+        active_tickets = get_active_tickets()
+        
+        if not active_tickets:
+            await context.bot.send_message(
+                chat_id=ADMIN_ID,
+                text="📭 No active support tickets."
+            )
+            return
+        
+        await context.bot.send_message(
+            chat_id=ADMIN_ID,
+            text=f"📋 Found {len(active_tickets)} active ticket(s)..."
+        )
+        
+        # Show each ticket with action buttons
+        for ticket in active_tickets:
+            user_id = ticket['user_id']
+            
+            # Get last message from user
+            messages = ticket.get('messages', [])
+            user_messages = [msg for msg in messages if msg.get('from') == 'user']
+            last_message = user_messages[-1]['text'] if user_messages else "No messages yet"
+            last_message_preview = (last_message[:50] + '...') if len(last_message) > 50 else last_message
+            
+            # Create inline keyboard with action buttons
+            keyboard = [
+                [
+                    InlineKeyboardButton("💬 Reply", callback_data=f'quick_reply_{user_id}'),
+                    InlineKeyboardButton("🔒 Close", callback_data=f'close_ticket_{user_id}')
+                ],
+                [InlineKeyboardButton("📜 View History", callback_data=f'view_history_{user_id}')]
+            ]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            
+            ticket_info = (
+                f"🎫 Active Ticket\n\n"
+                f"👤 {ticket['first_name']}\n"
+                f"🆔 ID: {user_id}\n"
+                f"📱 @{ticket.get('username') or 'No username'}\n"
+                f"💬 Total Messages: {len(messages)}\n"
+                f"📝 Last Message: \"{last_message_preview}\"\n"
+                f"{'─' * 30}"
+            )
+            
+            await context.bot.send_message(
+                chat_id=ADMIN_ID,
+                text=ticket_info,
+                reply_markup=reply_markup
+            )
         return
     
     if option == 'admin_stats':
@@ -316,9 +365,47 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             await query.answer("❌ Only admin can use this", show_alert=True)
             return
         
-        await query.answer()
-        # Call the stats command function
-        await stats_command(update, context)
+        await query.answer("Loading statistics...", show_alert=False)
+        
+        if not db_pool:
+            await context.bot.send_message(
+                chat_id=ADMIN_ID,
+                text="❌ Database not connected."
+            )
+            return
+        
+        conn = db_pool.getconn()
+        try:
+            cursor = conn.cursor()
+            
+            cursor.execute("SELECT COUNT(*) FROM users")
+            total_users = cursor.fetchone()[0]
+            
+            cursor.execute("SELECT COUNT(*) FROM tickets")
+            total_tickets = cursor.fetchone()[0]
+            
+            cursor.execute("SELECT COUNT(*) FROM tickets WHERE active = TRUE")
+            active_tickets = cursor.fetchone()[0]
+            
+            cursor.execute("SELECT COUNT(*) FROM tickets WHERE active = FALSE")
+            closed_tickets = cursor.fetchone()[0]
+            
+            cursor.close()
+            
+            message = (
+                "📊 Bot Statistics\n\n"
+                f"👥 Total Users: {total_users}\n"
+                f"🎫 Total Tickets: {total_tickets}\n"
+                f"✅ Active Tickets: {active_tickets}\n"
+                f"🔒 Closed Tickets: {closed_tickets}\n"
+            )
+            
+            await context.bot.send_message(
+                chat_id=ADMIN_ID,
+                text=message
+            )
+        finally:
+            db_pool.putconn(conn)
         return
     
     if option == 'admin_users':
