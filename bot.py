@@ -24,6 +24,9 @@ db_pool = None
 # Store last user who messaged admin (for quick reply)
 last_user_message = {}
 
+# Store pagination state for each admin: {admin_id: {'page': int, 'filter': str}}
+pagination_state = {}
+
 def init_database():
     """Initialize PostgreSQL connection."""
     global db_pool
@@ -452,45 +455,89 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             db_pool.putconn(conn)
         return
     
-    if option == 'admin_quick_close':
+    # Handle Quick Close Dashboard with pagination
+    if option.startswith('admin_quick_close'):
         if user.id != ADMIN_ID:
             await query.answer("❌ Only admin can use this", show_alert=True)
             return
         
+        # Extract page number from callback data
+        page = 1
+        filter_type = 'all'
+        
+        if '_page_' in option:
+            parts = option.split('_page_')
+            page = int(parts[1].split('_')[0])
+            if '_filter_' in option:
+                filter_type = parts[1].split('_filter_')[1]
+        elif '_filter_' in option:
+            filter_type = option.split('_filter_')[1]
+        
         await query.answer("Loading dashboard...", show_alert=False)
         
         # Get active tickets from database
-        active_tickets = get_active_tickets()
+        all_tickets = get_active_tickets()
         
-        if not active_tickets:
+        if not all_tickets:
             await context.bot.send_message(
                 chat_id=ADMIN_ID,
                 text="📭 No open tickets! All clear! ✅"
             )
             return
         
-        # Show compact dashboard with one-click close buttons
+        # Apply filters
+        filtered_tickets = all_tickets
+        filter_label = "All Tickets"
+        
+        if filter_type == 'today':
+            from datetime import datetime, timedelta
+            today = datetime.utcnow().date()
+            filtered_tickets = [t for t in all_tickets if t.get('created_at') and t['created_at'].date() == today]
+            filter_label = "Today's Tickets"
+        elif filter_type == 'urgent':
+            filtered_tickets = [t for t in all_tickets if len(t.get('messages', [])) >= 5]
+            filter_label = "Urgent (5+ messages)"
+        elif filter_type == 'recent':
+            filtered_tickets = all_tickets[:20]
+            filter_label = "20 Most Recent"
+        
+        if not filtered_tickets:
+            await context.bot.send_message(
+                chat_id=ADMIN_ID,
+                text=f"📭 No tickets match filter: {filter_label}"
+            )
+            return
+        
+        # Pagination
+        per_page = 10
+        total_pages = (len(filtered_tickets) + per_page - 1) // per_page
+        page = max(1, min(page, total_pages))
+        
+        start_idx = (page - 1) * per_page
+        end_idx = min(start_idx + per_page, len(filtered_tickets))
+        page_tickets = filtered_tickets[start_idx:end_idx]
+        
+        # Build message
         message = f"🚀 Quick Close Dashboard\n\n"
-        message += f"📊 {len(active_tickets)} Open Ticket(s)\n"
+        message += f"📊 {len(filtered_tickets)} Ticket(s) | Filter: {filter_label}\n"
+        message += f"📄 Page {page}/{total_pages}\n"
         message += f"{'═' * 30}\n\n"
         
         keyboard = []
         
-        for ticket in active_tickets[:10]:  # Show max 10 tickets
+        for ticket in page_tickets:
             user_id = ticket['user_id']
             first_name = ticket['first_name']
             username = ticket.get('username', 'no_username')
             messages = ticket.get('messages', [])
             msg_count = len(messages)
             
-            # Get last message preview
             user_messages = [msg for msg in messages if msg.get('from') == 'user']
             last_msg = user_messages[-1]['text'][:30] + '...' if user_messages and len(user_messages[-1]['text']) > 30 else (user_messages[-1]['text'] if user_messages else "No messages")
             
             message += f"👤 {first_name} (@{username})\n"
             message += f"   💬 {msg_count} msgs | Last: \"{last_msg}\"\n\n"
             
-            # Add close button for each ticket
             keyboard.append([
                 InlineKeyboardButton(
                     f"✅ Close {first_name}'s Ticket", 
@@ -498,14 +545,26 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                 )
             ])
         
-        # Add refresh and view all buttons
+        # Pagination buttons
+        nav_buttons = []
+        if page > 1:
+            nav_buttons.append(InlineKeyboardButton("⬅️ Prev", callback_data=f'admin_quick_close_page_{page-1}_filter_{filter_type}'))
+        nav_buttons.append(InlineKeyboardButton(f"📄 {page}/{total_pages}", callback_data='noop'))
+        if page < total_pages:
+            nav_buttons.append(InlineKeyboardButton("Next ➡️", callback_data=f'admin_quick_close_page_{page+1}_filter_{filter_type}'))
+        
+        if len(nav_buttons) > 1:
+            keyboard.append(nav_buttons)
+        
+        # Filter buttons
         keyboard.append([
-            InlineKeyboardButton("🔄 Refresh", callback_data='admin_quick_close'),
+            InlineKeyboardButton("🔍 All", callback_data='admin_quick_close_filter_all'),
+            InlineKeyboardButton("📅 Today", callback_data='admin_quick_close_filter_today'),
+        ])
+        keyboard.append([
+            InlineKeyboardButton("🔥 Urgent", callback_data='admin_quick_close_filter_urgent'),
             InlineKeyboardButton("📋 View Details", callback_data='admin_tickets')
         ])
-        
-        if len(active_tickets) > 10:
-            message += f"\n⚠️ Showing first 10 of {len(active_tickets)} tickets"
         
         reply_markup = InlineKeyboardMarkup(keyboard)
         
@@ -1065,6 +1124,105 @@ async def myid_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     
     await update.message.reply_text(message, parse_mode='Markdown')
 
+# Admin command: Search tickets
+async def search_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Search for tickets by name, username, or user ID (Admin only)."""
+    user = update.effective_user
+    
+    if user.id != ADMIN_ID:
+        await update.message.reply_text("❌ This command is only for admins.")
+        return
+    
+    if not context.args:
+        await update.message.reply_text(
+            "🔍 Search Tickets\n\n"
+            "Usage:\n"
+            "/search john - Search by name\n"
+            "/search @username - Search by username\n"
+            "/search 123456789 - Search by user ID\n\n"
+            "Example: /search john"
+        )
+        return
+    
+    search_term = ' '.join(context.args).lower().strip()
+    
+    # Remove @ if searching by username
+    if search_term.startswith('@'):
+        search_term = search_term[1:]
+    
+    if not db_pool:
+        await update.message.reply_text("❌ Database not connected.")
+        return
+    
+    conn = db_pool.getconn()
+    try:
+        cursor = conn.cursor(cursor_factory=RealDictCursor)
+        
+        # Try to search by user ID first (if it's a number)
+        if search_term.isdigit():
+            cursor.execute('''
+                SELECT user_id, username, first_name, last_name, active,
+                       created_at, last_updated, messages
+                FROM tickets WHERE user_id = %s
+            ''', (int(search_term),))
+        else:
+            # Search by name or username (case-insensitive)
+            cursor.execute('''
+                SELECT user_id, username, first_name, last_name, active,
+                       created_at, last_updated, messages
+                FROM tickets 
+                WHERE LOWER(first_name) LIKE %s 
+                   OR LOWER(last_name) LIKE %s
+                   OR LOWER(username) LIKE %s
+                ORDER BY last_updated DESC
+                LIMIT 20
+            ''', (f'%{search_term}%', f'%{search_term}%', f'%{search_term}%'))
+        
+        results = cursor.fetchall()
+        cursor.close()
+        
+        if not results:
+            await update.message.reply_text(
+                f"🔍 No tickets found for: '{search_term}'\n\n"
+                f"Try searching by:\n"
+                f"- First name\n"
+                f"- Username (without @)\n"
+                f"- User ID"
+            )
+            return
+        
+        message = f"🔍 Search Results for: '{search_term}'\n"
+        message += f"Found {len(results)} ticket(s)\n"
+        message += f"{'═' * 30}\n\n"
+        
+        for ticket in results:
+            user_id = ticket['user_id']
+            first_name = ticket['first_name']
+            username = ticket.get('username', 'no_username')
+            active = ticket.get('active', False)
+            messages = ticket.get('messages', [])
+            
+            status = "🟢 ACTIVE" if active else "🔴 CLOSED"
+            
+            message += f"{status}\n"
+            message += f"👤 {first_name} (@{username})\n"
+            message += f"🆔 ID: {user_id}\n"
+            message += f"💬 Messages: {len(messages)}\n"
+            
+            # Show ticket actions
+            if active:
+                message += f"⚡ Reply: /reply {user_id} your_message\n"
+                message += f"🔒 Close: /close {user_id}\n"
+            
+            message += f"{'─' * 25}\n\n"
+        
+        if len(results) == 20:
+            message += "⚠️ Showing first 20 results. Be more specific to narrow down."
+        
+        await update.message.reply_text(message)
+    finally:
+        db_pool.putconn(conn)
+
 def main() -> None:
     """Start the bot."""
     global ADMIN_ID
@@ -1108,6 +1266,7 @@ def main() -> None:
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("stop", stop_command))
     application.add_handler(CommandHandler("myid", myid_command))
+    application.add_handler(CommandHandler("search", search_command))
     application.add_handler(CommandHandler("tickets", tickets_command))
     application.add_handler(CommandHandler("reply", reply_command))
     application.add_handler(CommandHandler("close", close_command))
@@ -1120,7 +1279,7 @@ def main() -> None:
     logger.info("🚀 Bot is starting polling...")
     logger.info("📋 Available commands:")
     logger.info("   User: /start, /stop")
-    logger.info("   Admin: /tickets, /reply, /close, /stats")
+    logger.info("   Admin: /search, /tickets, /reply, /close, /stats")
     try:
         application.run_polling(allowed_updates=Update.ALL_TYPES)
     except Exception as e:
