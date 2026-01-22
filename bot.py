@@ -1664,6 +1664,44 @@ async def myid_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     
     await update.message.reply_text(message, parse_mode='Markdown')
 
+# Admin command: Debug tickets (temporary)
+async def debug_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Debug ticket messages (Admin only)."""
+    user = update.effective_user
+    
+    if user.id != ADMIN_ID:
+        await update.message.reply_text("❌ This command is only for admins.")
+        return
+    
+    if not db_pool:
+        await update.message.reply_text("❌ Database not connected.")
+        return
+    
+    conn = db_pool.getconn()
+    try:
+        cursor = conn.cursor(cursor_factory=RealDictCursor)
+        cursor.execute('''
+            SELECT user_id, first_name, messages FROM tickets WHERE active = TRUE
+        ''')
+        tickets = cursor.fetchall()
+        cursor.close()
+        
+        if not tickets:
+            await update.message.reply_text("📭 No active tickets.")
+            return
+        
+        message = "🐛 Debug: Active Tickets Messages\n\n"
+        for ticket in tickets:
+            messages = ticket.get('messages', [])
+            first_msg = messages[0]['text'] if messages else "No messages"
+            message += f"👤 {ticket['first_name']} (ID: {ticket['user_id']})\n"
+            message += f"📝 First message: \"{first_msg}\"\n"
+            message += f"{'─' * 25}\n\n"
+        
+        await update.message.reply_text(message)
+    finally:
+        db_pool.putconn(conn)
+
 # Admin command: Category view
 async def category_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Show tickets by category (Admin only)."""
@@ -1879,6 +1917,7 @@ def main() -> None:
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("stop", stop_command))
     application.add_handler(CommandHandler("myid", myid_command))
+    application.add_handler(CommandHandler("debug", debug_command))
     application.add_handler(CommandHandler("category", category_command))
     application.add_handler(CommandHandler("search", search_command))
     application.add_handler(CommandHandler("tickets", tickets_command))
