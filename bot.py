@@ -27,6 +27,9 @@ last_user_message = {}
 # Store pagination state for each admin: {admin_id: {'page': int, 'filter': str}}
 pagination_state = {}
 
+# Store conversation state for users: {user_id: {'state': str, 'data': {}, 'option': str}}
+conversation_states = {}
+
 def init_database():
     """Initialize PostgreSQL connection."""
     global db_pool
@@ -276,21 +279,25 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             reply_markup=reply_markup
         )
     else:
+        # Clear any existing conversation state
+        if user.id in conversation_states:
+            del conversation_states[user.id]
+        
         # Regular users get normal menu
         keyboard = [
-            [InlineKeyboardButton("🎮 Option 1", callback_data='option_1')],
-            [InlineKeyboardButton("🎯 Option 2", callback_data='option_2')],
-            [InlineKeyboardButton("🎲 Option 3", callback_data='option_3')],
-            [InlineKeyboardButton("🏆 Option 4", callback_data='option_4')],
-            [InlineKeyboardButton("⚡ Option 5", callback_data='option_5')],
+            [InlineKeyboardButton("💰 5000 Gold for X Post", callback_data='option_1')],
+            [InlineKeyboardButton("🎁 Promoters Reward", callback_data='option_2')],
+            [InlineKeyboardButton("👥 Refer and Earn Reward", callback_data='option_3')],
+            [InlineKeyboardButton("⛏️ Picaxe Issue", callback_data='option_4')],
+            [InlineKeyboardButton("💳 Wallet Issue", callback_data='option_5')],
             [InlineKeyboardButton("💬 Contact Support", callback_data='contact_support')],
         ]
         
         reply_markup = InlineKeyboardMarkup(keyboard)
         
         await update.message.reply_text(
-            f'👋 Welcome {user.first_name}!\n\n'
-            f'🎮 Choose one of the options below to continue:',
+            f'👋 Welcome to Gold Mining Bot, {user.first_name}!\n\n'
+            f'🎮 Choose an option below:',
             reply_markup=reply_markup
         )
 
@@ -778,54 +785,366 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     
     # Handle contact support
     if option == 'contact_support':
-        # Save ticket to database
-        save_ticket(user.id, user.username, user.first_name, user.last_name, active=True)
+        conversation_states[user.id] = {
+            'state': 'waiting_wallet_support',
+            'option': 'contact_support',
+            'data': {}
+        }
         
         await query.edit_message_text(
-            text='💬 Support Chat Activated!\n\n'
-                 'You can now send messages and our team will respond.\n'
-                 'Type /stop to end the conversation.'
-        )
-        
-        # Create inline keyboard with Reply button for admin
-        keyboard = [
-            [InlineKeyboardButton("💬 Quick Reply", callback_data=f'quick_reply_{user.id}')]
-        ]
-        reply_markup = InlineKeyboardMarkup(keyboard)
-        
-        await context.bot.send_message(
-            chat_id=ADMIN_ID,
-            text=f"🆕 NEW SUPPORT TICKET\n"
-                 f"👤 {user.first_name} {user.last_name or ''}\n"
-                 f"🆔 ID: {user.id}\n"
-                 f"📱 @{user.username or 'No username'}\n\n"
-                 f"🔹 Click button below to reply\n"
-                 f"🔹 Or just type your message\n"
-                 f"🔹 Or use: /reply {user.id} message",
-            reply_markup=reply_markup
+            text='💬 Contact Support\n\n'
+                 'We\'re here to help you!\n\n'
+                 '📝 Please provide your Solana wallet address connected to the game:'
         )
         return
     
-    # Response based on selection
-    responses = {
-        'option_1': '🎮 You selected Option 1!\n\nThis feature will be added soon.',
-        'option_2': '🎯 You selected Option 2!\n\nThis feature will be added soon.',
-        'option_3': '🎲 You selected Option 3!\n\nThis feature will be added soon.',
-        'option_4': '🏆 You selected Option 4!\n\nThis feature will be added soon.',
-        'option_5': '⚡ You selected Option 5!\n\nThis feature will be added soon.',
-    }
+    # Handle Option 1: 5000 Gold for X Post
+    if option == 'option_1':
+        conversation_states[user.id] = {
+            'state': 'waiting_wallet_option1',
+            'option': 'option_1',
+            'data': {}
+        }
+        
+        await query.edit_message_text(
+            text='💰 5000 Gold for X Post\n\n'
+                 '🎉 Share our game on X (Twitter) and earn 5000 Gold!\n\n'
+                 '📝 Please provide your Solana wallet address connected to the game:'
+        )
+        return
     
-    await query.edit_message_text(
-        text=responses.get(option, 'Unknown option selected.')
-    )
+    # Handle Option 2: Promoters Reward
+    if option == 'option_2':
+        conversation_states[user.id] = {
+            'state': 'waiting_wallet_option2',
+            'option': 'option_2',
+            'data': {}
+        }
+        
+        await query.edit_message_text(
+            text='🎁 Promoters Reward\n\n'
+                 '💎 Become a promoter and earn exclusive rewards!\n\n'
+                 '📝 Please provide your Solana wallet address connected to the game:'
+        )
+        return
+    
+    # Handle Option 3: Refer and Earn Reward
+    if option == 'option_3':
+        conversation_states[user.id] = {
+            'state': 'waiting_wallet_option3',
+            'option': 'option_3',
+            'data': {}
+        }
+        
+        await query.edit_message_text(
+            text='👥 Refer and Earn Reward\n\n'
+                 '🌟 Invite friends and earn amazing rewards!\n\n'
+                 '📝 Please provide your Solana wallet address connected to the game:'
+        )
+        return
+    
+    # Handle Option 4: Picaxe Issue
+    if option == 'option_4':
+        conversation_states[user.id] = {
+            'state': 'waiting_wallet_option4',
+            'option': 'option_4',
+            'data': {}
+        }
+        
+        await query.edit_message_text(
+            text='⛏️ Picaxe Issue\n\n'
+                 'Having trouble with your Picaxe?\n\n'
+                 '📝 Please provide your Solana wallet address connected to the game:'
+        )
+        return
+    
+    # Handle Option 5: Wallet Issue
+    if option == 'option_5':
+        conversation_states[user.id] = {
+            'state': 'waiting_wallet_option5',
+            'option': 'option_5',
+            'data': {}
+        }
+        
+        await query.edit_message_text(
+            text='💳 Wallet Issue\n\n'
+                 'Having problems with your wallet?\n\n'
+                 '📝 Please provide your Solana wallet address:'
+        )
+        return
 
 # Handle user messages in support chat
 async def handle_user_message(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Handle messages from users in active support chats."""
+    """Handle messages from users in active support chats or conversation flows."""
     user = update.effective_user
     message_text = update.message.text
     
-    # Check if user has active support chat
+    # Check if user is in a conversation flow
+    if user.id in conversation_states:
+        state_data = conversation_states[user.id]
+        current_state = state_data['state']
+        option = state_data['option']
+        
+        # Option 1: 5000 Gold for X Post Flow
+        if current_state == 'waiting_wallet_option1':
+            state_data['data']['wallet'] = message_text
+            state_data['state'] = 'waiting_xpost_option1'
+            await update.message.reply_text(
+                f"✅ Wallet address received: {message_text}\n\n"
+                f"📲 Now, please share the link of your X (Twitter) post where you shared our referral link:"
+            )
+            return
+        
+        elif current_state == 'waiting_xpost_option1':
+            state_data['data']['x_post_link'] = message_text
+            wallet = state_data['data']['wallet']
+            
+            # Create ticket
+            save_ticket(user.id, user.username, user.first_name, user.last_name, active=True)
+            add_message_to_ticket(user.id, f"💰 5000 Gold for X Post Request", from_user='user')
+            add_message_to_ticket(user.id, f"Wallet: {wallet}", from_user='user')
+            add_message_to_ticket(user.id, f"X Post Link: {message_text}", from_user='user')
+            
+            # Notify admin
+            await notify_admin(
+                context,
+                f"🆕 NEW REQUEST: 5000 Gold for X Post\n\n"
+                f"👤 {user.first_name} (@{user.username or 'No username'})\n"
+                f"🆔 ID: {user.id}\n"
+                f"💳 Wallet: {wallet}\n"
+                f"🔗 X Post: {message_text}\n\n"
+                f"⚡ Review and reply: /reply {user.id} message\n"
+                f"🔒 Close when done: /close {user.id}"
+            )
+            
+            await update.message.reply_text(
+                "✅ Thank you! Your submission has been received.\n\n"
+                "⏳ Please wait while our agent reviews and confirms your post.\n\n"
+                "📬 You'll be notified once approved!\n\n"
+                "🎫 Your ticket will remain open until the admin closes it."
+            )
+            
+            # Clear conversation state
+            del conversation_states[user.id]
+            return
+        
+        # Option 2: Promoters Reward Flow
+        elif current_state == 'waiting_wallet_option2':
+            state_data['data']['wallet'] = message_text
+            state_data['state'] = 'waiting_xpost_option2'
+            await update.message.reply_text(
+                f"✅ Wallet address received: {message_text}\n\n"
+                f"🎉 Thank you for becoming a promoter!\n\n"
+                f"📲 Now, please share our post on X (Twitter) and send us the link to your post:"
+            )
+            return
+        
+        elif current_state == 'waiting_xpost_option2':
+            state_data['data']['x_post_link'] = message_text
+            wallet = state_data['data']['wallet']
+            
+            # Create ticket
+            save_ticket(user.id, user.username, user.first_name, user.last_name, active=True)
+            add_message_to_ticket(user.id, f"🎁 Promoters Reward Request", from_user='user')
+            add_message_to_ticket(user.id, f"Wallet: {wallet}", from_user='user')
+            add_message_to_ticket(user.id, f"X Post Link: {message_text}", from_user='user')
+            
+            # Notify admin
+            await notify_admin(
+                context,
+                f"🆕 NEW REQUEST: Promoters Reward\n\n"
+                f"👤 {user.first_name} (@{user.username or 'No username'})\n"
+                f"🆔 ID: {user.id}\n"
+                f"💳 Wallet: {wallet}\n"
+                f"🔗 X Post: {message_text}\n\n"
+                f"⚡ Review and reply: /reply {user.id} message\n"
+                f"🔒 Close when done: /close {user.id}"
+            )
+            
+            await update.message.reply_text(
+                "✅ Thank you!\n\n"
+                "⏰ Please wait for 24 hours and your reward will be shared to the wallet address.\n\n"
+                "🎫 Your ticket will remain open until the admin closes it."
+            )
+            
+            # Clear conversation state
+            del conversation_states[user.id]
+            return
+        
+        # Option 3: Refer and Earn Reward Flow
+        elif current_state == 'waiting_wallet_option3':
+            state_data['data']['wallet'] = message_text
+            state_data['state'] = 'waiting_question_option3'
+            await update.message.reply_text(
+                f"✅ Wallet address received: {message_text}\n\n"
+                f"❓ Are you facing any issue or do you have any questions?"
+            )
+            return
+        
+        elif current_state == 'waiting_question_option3':
+            wallet = state_data['data']['wallet']
+            
+            # Create ticket
+            save_ticket(user.id, user.username, user.first_name, user.last_name, active=True)
+            add_message_to_ticket(user.id, f"👥 Refer and Earn Reward", from_user='user')
+            add_message_to_ticket(user.id, f"Wallet: {wallet}", from_user='user')
+            add_message_to_ticket(user.id, f"Question/Issue: {message_text}", from_user='user')
+            
+            # Notify admin
+            await notify_admin(
+                context,
+                f"🆕 NEW REQUEST: Refer and Earn Reward\n\n"
+                f"👤 {user.first_name} (@{user.username or 'No username'})\n"
+                f"🆔 ID: {user.id}\n"
+                f"💳 Wallet: {wallet}\n"
+                f"💬 Question: {message_text}\n\n"
+                f"⚡ Reply: /reply {user.id} message\n"
+                f"🔒 Close: /close {user.id}"
+            )
+            
+            await update.message.reply_text(
+                "✅ Thank you for your message!\n\n"
+                "🎫 Your ticket will remain open until the admin closes it.\n\n"
+                "📬 You'll receive a response soon!"
+            )
+            
+            # Clear conversation state
+            del conversation_states[user.id]
+            return
+        
+        # Option 4: Picaxe Issue Flow
+        elif current_state == 'waiting_wallet_option4':
+            state_data['data']['wallet'] = message_text
+            state_data['state'] = 'waiting_issue_option4'
+            await update.message.reply_text(
+                f"✅ Wallet address received: {message_text}\n\n"
+                f"❓ Did you buy any Picaxe or are you facing any issue? Please tell us:"
+            )
+            return
+        
+        elif current_state == 'waiting_issue_option4':
+            wallet = state_data['data']['wallet']
+            
+            # Create ticket
+            save_ticket(user.id, user.username, user.first_name, user.last_name, active=True)
+            add_message_to_ticket(user.id, f"⛏️ Picaxe Issue", from_user='user')
+            add_message_to_ticket(user.id, f"Wallet: {wallet}", from_user='user')
+            add_message_to_ticket(user.id, f"Issue: {message_text}", from_user='user')
+            
+            # Notify admin
+            await notify_admin(
+                context,
+                f"🆕 NEW TICKET: Picaxe Issue\n\n"
+                f"👤 {user.first_name} (@{user.username or 'No username'})\n"
+                f"🆔 ID: {user.id}\n"
+                f"💳 Wallet: {wallet}\n"
+                f"⛏️ Issue: {message_text}\n\n"
+                f"⚡ Reply: /reply {user.id} message\n"
+                f"🔒 Close: /close {user.id}"
+            )
+            
+            await update.message.reply_text(
+                "✅ Thank you for reporting!\n\n"
+                "⏳ Please wait for our support agent.\n\n"
+                "⚠️ Due to high requests, it may take some time.\n\n"
+                "🎫 Your ticket will remain open until resolved."
+            )
+            
+            # Clear conversation state
+            del conversation_states[user.id]
+            return
+        
+        # Option 5: Wallet Issue Flow
+        elif current_state == 'waiting_wallet_option5':
+            state_data['data']['wallet'] = message_text
+            state_data['state'] = 'waiting_issue_option5'
+            await update.message.reply_text(
+                f"✅ Wallet address received: {message_text}\n\n"
+                f"❓ What issue are you facing? Please describe:"
+            )
+            return
+        
+        elif current_state == 'waiting_issue_option5':
+            wallet = state_data['data']['wallet']
+            
+            # Create ticket
+            save_ticket(user.id, user.username, user.first_name, user.last_name, active=True)
+            add_message_to_ticket(user.id, f"💳 Wallet Issue", from_user='user')
+            add_message_to_ticket(user.id, f"Wallet: {wallet}", from_user='user')
+            add_message_to_ticket(user.id, f"Issue: {message_text}", from_user='user')
+            
+            # Notify admin
+            await notify_admin(
+                context,
+                f"🆕 NEW TICKET: Wallet Issue\n\n"
+                f"👤 {user.first_name} (@{user.username or 'No username'})\n"
+                f"🆔 ID: {user.id}\n"
+                f"💳 Wallet: {wallet}\n"
+                f"🐛 Issue: {message_text}\n\n"
+                f"⚡ Reply: /reply {user.id} message\n"
+                f"🔒 Close: /close {user.id}"
+            )
+            
+            await update.message.reply_text(
+                "✅ Thank you!\n\n"
+                "👨‍💼 Our support agent will get back to you soon.\n\n"
+                "🎫 Your ticket will remain open until resolved."
+            )
+            
+            # Clear conversation state
+            del conversation_states[user.id]
+            return
+        
+        # Contact Support Flow
+        elif current_state == 'waiting_wallet_support':
+            state_data['data']['wallet'] = message_text
+            state_data['state'] = 'waiting_problem_support'
+            await update.message.reply_text(
+                f"✅ Wallet address received: {message_text}\n\n"
+                f"❓ What problem are you facing? Please describe in detail:"
+            )
+            return
+        
+        elif current_state == 'waiting_problem_support':
+            wallet = state_data['data']['wallet']
+            
+            # Create ticket
+            save_ticket(user.id, user.username, user.first_name, user.last_name, active=True)
+            add_message_to_ticket(user.id, f"💬 Contact Support", from_user='user')
+            add_message_to_ticket(user.id, f"Wallet: {wallet}", from_user='user')
+            add_message_to_ticket(user.id, f"Problem: {message_text}", from_user='user')
+            
+            # Create inline keyboard with Reply button for admin
+            keyboard = [
+                [InlineKeyboardButton("💬 Quick Reply", callback_data=f'quick_reply_{user.id}')]
+            ]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            
+            # Notify admin
+            await context.bot.send_message(
+                chat_id=ADMIN_ID,
+                text=f"🆕 NEW SUPPORT TICKET\n\n"
+                     f"👤 {user.first_name} (@{user.username or 'No username'})\n"
+                     f"🆔 ID: {user.id}\n"
+                     f"💳 Wallet: {wallet}\n"
+                     f"📝 Problem: {message_text}\n\n"
+                     f"⚡ Reply: /reply {user.id} message\n"
+                     f"🔒 Close: /close {user.id}",
+                reply_markup=reply_markup
+            )
+            
+            await update.message.reply_text(
+                "✅ Thank you for contacting us!\n\n"
+                "⏳ Please wait for our support agent.\n\n"
+                "🎫 Your ticket will remain open until resolved.\n\n"
+                "📬 You can continue sending messages and we'll respond!"
+            )
+            
+            # Clear conversation state but keep ticket active
+            del conversation_states[user.id]
+            return
+    
+    # Check if user has active support chat (Contact Support option)
     ticket = get_ticket(user.id)
     if ticket and ticket.get('active', False):
         # Store message in database
