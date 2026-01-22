@@ -1281,31 +1281,30 @@ def main() -> None:
     logger.info("   User: /start, /stop")
     logger.info("   Admin: /search, /tickets, /reply, /close, /stats")
     
+    # Set bot commands menu (will be set on first update)
+    from telegram import BotCommand
+    
+    async def post_init(application):
+        """Set bot commands after initialization."""
+        try:
+            commands = [
+                BotCommand("start", "🏠 Open main menu / Admin panel"),
+                BotCommand("search", "🔍 Search tickets (name/username/ID)"),
+                BotCommand("tickets", "🎫 View all active tickets"),
+                BotCommand("stats", "📊 View bot statistics"),
+                BotCommand("reply", "💬 Reply to user (use: /reply ID message)"),
+                BotCommand("close", "🔒 Close ticket (use: /close ID)"),
+                BotCommand("myid", "🆔 Get your Telegram user ID"),
+            ]
+            await application.bot.set_my_commands(commands)
+            logger.info("✅ Bot commands menu set")
+        except Exception as e:
+            logger.error(f"⚠️ Failed to set commands menu: {e}")
+    
+    application.post_init = post_init
+    
     try:
-        # Set bot commands menu before starting polling
-        from telegram import BotCommand
-        import asyncio
-        
-        async def setup_and_run():
-            try:
-                commands = [
-                    BotCommand("start", "🏠 Open main menu / Admin panel"),
-                    BotCommand("search", "🔍 Search tickets (name/username/ID)"),
-                    BotCommand("tickets", "🎫 View all active tickets"),
-                    BotCommand("stats", "📊 View bot statistics"),
-                    BotCommand("reply", "💬 Reply to user (use: /reply ID message)"),
-                    BotCommand("close", "🔒 Close ticket (use: /close ID)"),
-                    BotCommand("myid", "🆔 Get your Telegram user ID"),
-                ]
-                await application.bot.set_my_commands(commands)
-                logger.info("✅ Bot commands menu set")
-            except Exception as e:
-                logger.error(f"⚠️ Failed to set commands menu: {e}")
-            
-            # Start polling
-            await application.run_polling(allowed_updates=Update.ALL_TYPES)
-        
-        asyncio.run(setup_and_run())
+        application.run_polling(allowed_updates=Update.ALL_TYPES)
     except Exception as e:
         logger.error(f"❌ Error running bot: {e}")
 
