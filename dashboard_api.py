@@ -198,4 +198,4 @@ if __name__ == '__main__':
     print("📊 Dashboard will be available at: http://localhost:5000")
     print("⚠️  Make sure DATABASE_URL environment variable is set!")
     print()
-    app.run(debug=True, port=5000)
+    app.run(debug=True, port=5000, host='127.0.0.1')
