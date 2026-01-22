@@ -800,17 +800,23 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     
     # Handle Option 1: 5000 Gold for X Post
     if option == 'option_1':
+        logger.info(f"User {user.id} selected Option 1")
         conversation_states[user.id] = {
             'state': 'waiting_wallet_option1',
             'option': 'option_1',
             'data': {}
         }
         
-        await query.edit_message_text(
-            text='💰 5000 Gold for X Post\n\n'
-                 '🎉 Share our game on X (Twitter) and earn 5000 Gold!\n\n'
-                 '📝 Please provide your Solana wallet address connected to the game:'
-        )
+        try:
+            await query.edit_message_text(
+                text='💰 5000 Gold for X Post\n\n'
+                     '🎉 Share our game on X (Twitter) and earn 5000 Gold!\n\n'
+                     '📝 Please provide your Solana wallet address connected to the game:'
+            )
+            logger.info(f"Option 1 message sent to user {user.id}")
+        except Exception as e:
+            logger.error(f"Error in Option 1: {e}")
+            await query.answer(f"Error: {e}", show_alert=True)
         return
     
     # Handle Option 2: Promoters Reward
