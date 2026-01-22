@@ -9,12 +9,23 @@ import psycopg2
 from psycopg2.extras import RealDictCursor
 import os
 import json
+import asyncio
+from telegram import Bot
 
 app = Flask(__name__)
 CORS(app, resources={r"/api/*": {"origins": "*"}})  # Allow browser to connect from anywhere
 
-# Get database URL from environment variable
+# Get environment variables
 DATABASE_URL = os.environ.get('DATABASE_URL', '')
+BOT_TOKEN = os.environ.get('BOT_TOKEN', '')
+
+# Initialize Telegram Bot
+telegram_bot = None
+if BOT_TOKEN:
+    telegram_bot = Bot(token=BOT_TOKEN)
+    print(f"✅ Telegram bot initialized")
+else:
+    print(f"⚠️  BOT_TOKEN not set - messages won't be sent to Telegram")
 
 def get_db_connection():
     """Connect to PostgreSQL database."""
@@ -135,10 +146,25 @@ def reply_to_ticket(user_id):
         cursor.close()
         conn.close()
         
-        # TODO: Send message via Telegram bot
-        # You'll need to import your bot instance and call send_message
-        
-        return jsonify({'success': True, 'message': 'Reply sent'})
+        # Send message via Telegram
+        if telegram_bot:
+            try:
+                # Run async telegram send in sync context
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                loop.run_until_complete(
+                    telegram_bot.send_message(
+                        chat_id=user_id,
+                        text=f"💬 Support Team Response:\n\n{message}"
+                    )
+                )
+                loop.close()
+                return jsonify({'success': True, 'message': 'Reply sent to user via Telegram!'})
+            except Exception as telegram_error:
+                return jsonify({'success': True, 'message': f'Saved to database but Telegram error: {str(telegram_error)}'})
+        else:
+            return jsonify({'success': True, 'message': 'Reply saved (BOT_TOKEN not set, message not sent to Telegram)'})
+            
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
@@ -158,6 +184,23 @@ def close_ticket(user_id):
         conn.commit()
         cursor.close()
         conn.close()
+        
+        # Notify user via Telegram
+        if telegram_bot:
+            try:
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                loop.run_until_complete(
+                    telegram_bot.send_message(
+                        chat_id=user_id,
+                        text="✅ Your support ticket has been closed.\n"
+                             "Thank you for contacting us!\n\n"
+                             "Type /start if you need help again."
+                    )
+                )
+                loop.close()
+            except Exception as telegram_error:
+                print(f"Failed to notify user via Telegram: {telegram_error}")
         
         return jsonify({'success': True, 'message': 'Ticket closed'})
     except Exception as e:
@@ -205,5 +248,8 @@ if __name__ == '__main__':
     print("🚀 Starting Dashboard API...")
     print("📊 Dashboard will be available at: http://localhost:5000")
     print("⚠️  Make sure DATABASE_URL environment variable is set!")
+    if not BOT_TOKEN:
+        print("⚠️  BOT_TOKEN not set - messages won't be sent to Telegram users!")
+        print("   Set it with: export BOT_TOKEN='your_bot_token'")
     print()
     app.run(debug=True, port=5000, host='127.0.0.1')
