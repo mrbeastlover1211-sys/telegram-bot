@@ -497,7 +497,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         filter_label = "All Tickets"
         
         if filter_type == 'today':
-            from datetime import datetime, timedelta
+            from datetime import timedelta
             today = datetime.utcnow().date()
             filtered_tickets = [t for t in all_tickets if t.get('created_at') and t['created_at'].date() == today]
             filter_label = "Today's Tickets"
