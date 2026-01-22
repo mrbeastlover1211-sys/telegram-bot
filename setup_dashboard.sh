@@ -16,7 +16,7 @@ echo ""
 
 # Step 2: Install dependencies
 echo "📦 Installing dependencies..."
-pip3 install flask flask-cors psycopg2-binary
+pip3 install flask flask-cors psycopg2-binary python-telegram-bot
 
 if [ $? -eq 0 ]; then
     echo "✅ Dependencies installed successfully"
