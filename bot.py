@@ -529,9 +529,23 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         for ticket in all_tickets:
             messages = ticket.get('messages', [])
             if messages and len(messages) > 0:
+                # Check first message for category identifier
                 first_msg = messages[0]['text']
-                if search_term[2:] in first_msg:  # Remove emoji from search
-                    filtered_tickets.append(ticket)
+                # More flexible matching - check if key phrase is in message
+                search_phrases = {
+                    'option_1': ['5000 Gold', '5000Gold'],
+                    'option_2': ['Promoters Reward', 'Promoter'],
+                    'option_3': ['Refer and Earn', 'Refer'],
+                    'option_4': ['Picaxe Issue', 'Picaxe'],
+                    'option_5': ['Wallet Issue'],
+                    'contact_support': ['Contact Support']
+                }
+                
+                phrases = search_phrases.get(category, [])
+                for phrase in phrases:
+                    if phrase in first_msg:
+                        filtered_tickets.append(ticket)
+                        break
         
         if not filtered_tickets:
             await context.bot.send_message(
@@ -1649,6 +1663,78 @@ async def myid_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     
     await update.message.reply_text(message, parse_mode='Markdown')
 
+# Admin command: Category view
+async def category_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Show tickets by category (Admin only)."""
+    user = update.effective_user
+    
+    if user.id != ADMIN_ID:
+        await update.message.reply_text("❌ This command is only for admins.")
+        return
+    
+    # Get ticket counts by category
+    if not db_pool:
+        await update.message.reply_text("❌ Database not connected.")
+        return
+    
+    conn = db_pool.getconn()
+    try:
+        cursor = conn.cursor(cursor_factory=RealDictCursor)
+        
+        # Get all active tickets
+        cursor.execute('''
+            SELECT user_id, messages FROM tickets WHERE active = TRUE
+        ''')
+        tickets = cursor.fetchall()
+        cursor.close()
+        
+        # Count tickets by category
+        categories = {
+            'option_1': 0,
+            'option_2': 0,
+            'option_3': 0,
+            'option_4': 0,
+            'option_5': 0,
+            'contact_support': 0
+        }
+        
+        for ticket in tickets:
+            messages = ticket.get('messages', [])
+            if messages and len(messages) > 0:
+                first_msg = messages[0]['text']
+                if '5000 Gold' in first_msg:
+                    categories['option_1'] += 1
+                elif 'Promoters Reward' in first_msg:
+                    categories['option_2'] += 1
+                elif 'Refer and Earn' in first_msg:
+                    categories['option_3'] += 1
+                elif 'Picaxe Issue' in first_msg:
+                    categories['option_4'] += 1
+                elif 'Wallet Issue' in first_msg:
+                    categories['option_5'] += 1
+                elif 'Contact Support' in first_msg:
+                    categories['contact_support'] += 1
+        
+        # Create menu with category buttons
+        keyboard = [
+            [InlineKeyboardButton(f"💰 5000 Gold for X Post ({categories['option_1']})", callback_data='admin_cat_option_1')],
+            [InlineKeyboardButton(f"🎁 Promoters Reward ({categories['option_2']})", callback_data='admin_cat_option_2')],
+            [InlineKeyboardButton(f"👥 Refer and Earn ({categories['option_3']})", callback_data='admin_cat_option_3')],
+            [InlineKeyboardButton(f"⛏️ Picaxe Issue ({categories['option_4']})", callback_data='admin_cat_option_4')],
+            [InlineKeyboardButton(f"💳 Wallet Issue ({categories['option_5']})", callback_data='admin_cat_option_5')],
+            [InlineKeyboardButton(f"💬 Contact Support ({categories['contact_support']})", callback_data='admin_cat_contact_support')],
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        message = (
+            f"📋 Tickets by Category\n\n"
+            f"Select a category to view tickets:\n"
+        )
+        
+        await update.message.reply_text(message, reply_markup=reply_markup)
+    finally:
+        db_pool.putconn(conn)
+
 # Admin command: Search tickets
 async def search_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Search for tickets by name, username, or user ID (Admin only)."""
@@ -1791,6 +1877,7 @@ def main() -> None:
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CommandHandler("stop", stop_command))
     application.add_handler(CommandHandler("myid", myid_command))
+    application.add_handler(CommandHandler("category", category_command))
     application.add_handler(CommandHandler("search", search_command))
     application.add_handler(CommandHandler("tickets", tickets_command))
     application.add_handler(CommandHandler("reply", reply_command))
@@ -1825,6 +1912,7 @@ def main() -> None:
             if ADMIN_ID:
                 admin_commands = [
                     BotCommand("start", "🏠 Open Admin Panel"),
+                    BotCommand("category", "📋 View tickets by category"),
                     BotCommand("search", "🔍 Search tickets (name/username/ID)"),
                     BotCommand("tickets", "🎫 View all active tickets"),
                     BotCommand("stats", "📊 View bot statistics"),
