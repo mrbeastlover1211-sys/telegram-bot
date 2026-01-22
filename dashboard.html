@@ -469,8 +469,22 @@
         async function loadTickets() {
             try {
                 const response = await fetch(`${API_BASE}/tickets?category=${currentCategory}`);
-                const tickets = await response.json();
+                const data = await response.json();
                 
+                // Check if there's an error
+                if (data.error) {
+                    console.error('API Error:', data.error);
+                    document.getElementById('tickets-container').innerHTML = `
+                        <div class="empty-state">
+                            <h3>⚠️ Database Error</h3>
+                            <p>${data.error}</p>
+                            <p style="font-size: 12px; color: #999;">Check Terminal for details</p>
+                        </div>
+                    `;
+                    return;
+                }
+                
+                const tickets = Array.isArray(data) ? data : [];
                 const container = document.getElementById('tickets-container');
                 
                 if (tickets.length === 0) {
