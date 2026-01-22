@@ -1282,22 +1282,38 @@ def main() -> None:
     logger.info("   Admin: /search, /tickets, /reply, /close, /stats")
     
     # Set bot commands menu (will be set on first update)
-    from telegram import BotCommand
+    from telegram import BotCommand, BotCommandScopeChat
     
     async def post_init(application):
         """Set bot commands after initialization."""
         try:
-            commands = [
-                BotCommand("start", "🏠 Open main menu / Admin panel"),
-                BotCommand("search", "🔍 Search tickets (name/username/ID)"),
-                BotCommand("tickets", "🎫 View all active tickets"),
-                BotCommand("stats", "📊 View bot statistics"),
-                BotCommand("reply", "💬 Reply to user (use: /reply ID message)"),
-                BotCommand("close", "🔒 Close ticket (use: /close ID)"),
-                BotCommand("myid", "🆔 Get your Telegram user ID"),
+            # Commands for regular users (minimal)
+            user_commands = [
+                BotCommand("start", "🏠 Start the bot"),
             ]
-            await application.bot.set_my_commands(commands)
-            logger.info("✅ Bot commands menu set")
+            
+            # Set default commands for all users
+            await application.bot.set_my_commands(user_commands)
+            logger.info("✅ Default user commands set")
+            
+            # Admin-only commands (if ADMIN_ID is set)
+            if ADMIN_ID:
+                admin_commands = [
+                    BotCommand("start", "🏠 Open Admin Panel"),
+                    BotCommand("search", "🔍 Search tickets (name/username/ID)"),
+                    BotCommand("tickets", "🎫 View all active tickets"),
+                    BotCommand("stats", "📊 View bot statistics"),
+                    BotCommand("reply", "💬 Reply to user (use: /reply ID message)"),
+                    BotCommand("close", "🔒 Close ticket (use: /close ID)"),
+                    BotCommand("myid", "🆔 Get your Telegram user ID"),
+                ]
+                
+                # Set admin-specific commands
+                await application.bot.set_my_commands(
+                    admin_commands,
+                    scope=BotCommandScopeChat(chat_id=ADMIN_ID)
+                )
+                logger.info(f"✅ Admin commands set for user {ADMIN_ID}")
         except Exception as e:
             logger.error(f"⚠️ Failed to set commands menu: {e}")
     
