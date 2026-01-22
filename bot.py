@@ -61,12 +61,19 @@ def init_database():
                 first_name TEXT,
                 last_name TEXT,
                 active BOOLEAN DEFAULT TRUE,
+                category TEXT,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 closed_at TIMESTAMP,
                 messages JSONB DEFAULT '[]'::jsonb
             )
         ''')
+        
+        # Add category column to existing tables (migration)
+        try:
+            cursor.execute('ALTER TABLE tickets ADD COLUMN IF NOT EXISTS category TEXT')
+        except:
+            pass
         
         # Create users table
         cursor.execute('''
@@ -95,7 +102,7 @@ def init_database():
         logger.error(f"❌ PostgreSQL initialization error: {e}")
         return False
 
-def save_ticket(user_id, username, first_name, last_name=None, active=True):
+def save_ticket(user_id, username, first_name, last_name=None, active=True, category=None):
     """Save or update a ticket in PostgreSQL."""
     if not db_pool:
         return
@@ -104,15 +111,16 @@ def save_ticket(user_id, username, first_name, last_name=None, active=True):
     try:
         cursor = conn.cursor()
         cursor.execute('''
-            INSERT INTO tickets (user_id, username, first_name, last_name, active, last_updated)
-            VALUES (%s, %s, %s, %s, %s, CURRENT_TIMESTAMP)
+            INSERT INTO tickets (user_id, username, first_name, last_name, active, category, last_updated)
+            VALUES (%s, %s, %s, %s, %s, %s, CURRENT_TIMESTAMP)
             ON CONFLICT (user_id) DO UPDATE SET
                 username = EXCLUDED.username,
                 first_name = EXCLUDED.first_name,
                 last_name = EXCLUDED.last_name,
                 active = EXCLUDED.active,
+                category = EXCLUDED.category,
                 last_updated = CURRENT_TIMESTAMP
-        ''', (user_id, username, first_name, last_name, active))
+        ''', (user_id, username, first_name, last_name, active, category))
         conn.commit()
         cursor.close()
     finally:
@@ -439,11 +447,14 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         try:
             cursor = conn.cursor(cursor_factory=RealDictCursor)
             
-            # Get all active tickets
+            # Get all active tickets with category counts
             cursor.execute('''
-                SELECT user_id, messages FROM tickets WHERE active = TRUE
+                SELECT category, COUNT(*) as count 
+                FROM tickets 
+                WHERE active = TRUE 
+                GROUP BY category
             ''')
-            tickets = cursor.fetchall()
+            results = cursor.fetchall()
             cursor.close()
             
             # Count tickets by category
@@ -456,23 +467,11 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
                 'contact_support': 0
             }
             
-            for ticket in tickets:
-                messages = ticket.get('messages', [])
-                if messages and len(messages) > 0:
-                    first_msg = messages[0]['text']
-                    # Use more flexible matching
-                    if '5000 Gold' in first_msg or '5000Gold' in first_msg:
-                        categories['option_1'] += 1
-                    elif 'Promoters Reward' in first_msg or 'Promoter' in first_msg:
-                        categories['option_2'] += 1
-                    elif 'Refer and Earn' in first_msg or 'Refer' in first_msg:
-                        categories['option_3'] += 1
-                    elif 'Picaxe' in first_msg:
-                        categories['option_4'] += 1
-                    elif 'Wallet Issue' in first_msg:
-                        categories['option_5'] += 1
-                    elif 'Contact Support' in first_msg:
-                        categories['contact_support'] += 1
+            for result in results:
+                cat = result.get('category')
+                count = result.get('count', 0)
+                if cat in categories:
+                    categories[cat] = count
             
             # Create menu with category buttons
             keyboard = [
@@ -523,30 +522,28 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         
         search_term = category_map.get(category, '')
         
-        # Get tickets for this category
-        all_tickets = get_active_tickets()
-        filtered_tickets = []
+        # Get tickets for this category using the category field
+        if not db_pool:
+            await context.bot.send_message(
+                chat_id=ADMIN_ID,
+                text="❌ Database not connected."
+            )
+            return
         
-        for ticket in all_tickets:
-            messages = ticket.get('messages', [])
-            if messages and len(messages) > 0:
-                # Check first message for category identifier
-                first_msg = messages[0]['text']
-                # More flexible matching - check if key phrase is in message
-                search_phrases = {
-                    'option_1': ['5000 Gold', '5000Gold'],
-                    'option_2': ['Promoters Reward', 'Promoter'],
-                    'option_3': ['Refer and Earn', 'Refer'],
-                    'option_4': ['Picaxe Issue', 'Picaxe'],
-                    'option_5': ['Wallet Issue'],
-                    'contact_support': ['Contact Support']
-                }
-                
-                phrases = search_phrases.get(category, [])
-                for phrase in phrases:
-                    if phrase in first_msg:
-                        filtered_tickets.append(ticket)
-                        break
+        conn = db_pool.getconn()
+        try:
+            cursor = conn.cursor(cursor_factory=RealDictCursor)
+            cursor.execute('''
+                SELECT user_id, username, first_name, last_name, active,
+                       created_at, last_updated, messages, category
+                FROM tickets 
+                WHERE active = TRUE AND category = %s
+                ORDER BY last_updated DESC
+            ''', (category,))
+            filtered_tickets = cursor.fetchall()
+            cursor.close()
+        finally:
+            db_pool.putconn(conn)
         
         if not filtered_tickets:
             await context.bot.send_message(
@@ -1121,7 +1118,7 @@ async def handle_user_message(update: Update, context: ContextTypes.DEFAULT_TYPE
             wallet = state_data['data']['wallet']
             
             # Create ticket
-            save_ticket(user.id, user.username, user.first_name, user.last_name, active=True)
+            save_ticket(user.id, user.username, user.first_name, user.last_name, active=True, category='option_1')
             add_message_to_ticket(user.id, f"💰 5000 Gold for X Post Request", from_user='user')
             add_message_to_ticket(user.id, f"Wallet: {wallet}", from_user='user')
             add_message_to_ticket(user.id, f"X Post Link: {message_text}", from_user='user')
@@ -1165,7 +1162,7 @@ async def handle_user_message(update: Update, context: ContextTypes.DEFAULT_TYPE
             wallet = state_data['data']['wallet']
             
             # Create ticket
-            save_ticket(user.id, user.username, user.first_name, user.last_name, active=True)
+            save_ticket(user.id, user.username, user.first_name, user.last_name, active=True, category='option_2')
             add_message_to_ticket(user.id, f"🎁 Promoters Reward Request", from_user='user')
             add_message_to_ticket(user.id, f"Wallet: {wallet}", from_user='user')
             add_message_to_ticket(user.id, f"X Post Link: {message_text}", from_user='user')
@@ -1206,7 +1203,7 @@ async def handle_user_message(update: Update, context: ContextTypes.DEFAULT_TYPE
             wallet = state_data['data']['wallet']
             
             # Create ticket
-            save_ticket(user.id, user.username, user.first_name, user.last_name, active=True)
+            save_ticket(user.id, user.username, user.first_name, user.last_name, active=True, category='option_3')
             add_message_to_ticket(user.id, f"👥 Refer and Earn Reward", from_user='user')
             add_message_to_ticket(user.id, f"Wallet: {wallet}", from_user='user')
             add_message_to_ticket(user.id, f"Question/Issue: {message_text}", from_user='user')
@@ -1247,7 +1244,7 @@ async def handle_user_message(update: Update, context: ContextTypes.DEFAULT_TYPE
             wallet = state_data['data']['wallet']
             
             # Create ticket
-            save_ticket(user.id, user.username, user.first_name, user.last_name, active=True)
+            save_ticket(user.id, user.username, user.first_name, user.last_name, active=True, category='option_4')
             add_message_to_ticket(user.id, f"⛏️ Picaxe Issue", from_user='user')
             add_message_to_ticket(user.id, f"Wallet: {wallet}", from_user='user')
             add_message_to_ticket(user.id, f"Issue: {message_text}", from_user='user')
@@ -1289,7 +1286,7 @@ async def handle_user_message(update: Update, context: ContextTypes.DEFAULT_TYPE
             wallet = state_data['data']['wallet']
             
             # Create ticket
-            save_ticket(user.id, user.username, user.first_name, user.last_name, active=True)
+            save_ticket(user.id, user.username, user.first_name, user.last_name, active=True, category='option_5')
             add_message_to_ticket(user.id, f"💳 Wallet Issue", from_user='user')
             add_message_to_ticket(user.id, f"Wallet: {wallet}", from_user='user')
             add_message_to_ticket(user.id, f"Issue: {message_text}", from_user='user')
@@ -1330,7 +1327,7 @@ async def handle_user_message(update: Update, context: ContextTypes.DEFAULT_TYPE
             wallet = state_data['data']['wallet']
             
             # Create ticket
-            save_ticket(user.id, user.username, user.first_name, user.last_name, active=True)
+            save_ticket(user.id, user.username, user.first_name, user.last_name, active=True, category='contact_support')
             add_message_to_ticket(user.id, f"💬 Contact Support", from_user='user')
             add_message_to_ticket(user.id, f"Wallet: {wallet}", from_user='user')
             add_message_to_ticket(user.id, f"Problem: {message_text}", from_user='user')
@@ -1720,11 +1717,14 @@ async def category_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     try:
         cursor = conn.cursor(cursor_factory=RealDictCursor)
         
-        # Get all active tickets
+        # Get all active tickets with category counts
         cursor.execute('''
-            SELECT user_id, messages FROM tickets WHERE active = TRUE
+            SELECT category, COUNT(*) as count 
+            FROM tickets 
+            WHERE active = TRUE 
+            GROUP BY category
         ''')
-        tickets = cursor.fetchall()
+        results = cursor.fetchall()
         cursor.close()
         
         # Count tickets by category
@@ -1737,23 +1737,11 @@ async def category_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             'contact_support': 0
         }
         
-        for ticket in tickets:
-            messages = ticket.get('messages', [])
-            if messages and len(messages) > 0:
-                first_msg = messages[0]['text']
-                # Use more flexible matching
-                if '5000 Gold' in first_msg or '5000Gold' in first_msg:
-                    categories['option_1'] += 1
-                elif 'Promoters Reward' in first_msg or 'Promoter' in first_msg:
-                    categories['option_2'] += 1
-                elif 'Refer and Earn' in first_msg or 'Refer' in first_msg:
-                    categories['option_3'] += 1
-                elif 'Picaxe' in first_msg:
-                    categories['option_4'] += 1
-                elif 'Wallet Issue' in first_msg:
-                    categories['option_5'] += 1
-                elif 'Contact Support' in first_msg:
-                    categories['contact_support'] += 1
+        for result in results:
+            cat = result.get('category')
+            count = result.get('count', 0)
+            if cat in categories:
+                categories[cat] = count
         
         # Create menu with category buttons
         keyboard = [
