@@ -573,12 +573,28 @@
             document.getElementById('chat-user-name').textContent = userName;
             document.getElementById('chat-modal').classList.add('active');
             await loadMessages(userId);
+            
+            // Auto-refresh messages every 3 seconds while chat is open
+            if (window.chatRefreshInterval) {
+                clearInterval(window.chatRefreshInterval);
+            }
+            window.chatRefreshInterval = setInterval(async () => {
+                if (currentChatUserId === userId) {
+                    await loadMessages(userId);
+                }
+            }, 3000);
         }
 
         // Close chat
         function closeChat() {
             document.getElementById('chat-modal').classList.remove('active');
             currentChatUserId = null;
+            
+            // Stop auto-refresh
+            if (window.chatRefreshInterval) {
+                clearInterval(window.chatRefreshInterval);
+                window.chatRefreshInterval = null;
+            }
         }
 
         // Load messages
@@ -588,19 +604,31 @@
                 const messages = await response.json();
                 
                 const container = document.getElementById('chat-messages');
-                container.innerHTML = messages.map(msg => `
-                    <div class="message ${msg.from}">
-                        <div class="message-bubble">
-                            <div>${msg.text}</div>
-                            <div class="message-time">${msg.time}</div>
+                
+                if (!Array.isArray(messages) || messages.length === 0) {
+                    container.innerHTML = '<div style="text-align: center; padding: 40px; color: #999;">No messages yet</div>';
+                    return;
+                }
+                
+                container.innerHTML = messages.map(msg => {
+                    // Escape HTML to prevent issues
+                    const text = String(msg.text).replace(/</g, '&lt;').replace(/>/g, '&gt;');
+                    return `
+                        <div class="message ${msg.from}">
+                            <div class="message-bubble">
+                                <div>${text}</div>
+                                <div class="message-time">${msg.time || ''}</div>
+                            </div>
                         </div>
-                    </div>
-                `).join('');
+                    `;
+                }).join('');
                 
                 // Scroll to bottom
                 container.scrollTop = container.scrollHeight;
             } catch (error) {
                 console.error('Error loading messages:', error);
+                document.getElementById('chat-messages').innerHTML = 
+                    '<div style="text-align: center; padding: 40px; color: #f00;">Error loading messages</div>';
             }
         }
 
@@ -611,6 +639,9 @@
             
             if (!message || !currentChatUserId) return;
             
+            // Disable input while sending
+            input.disabled = true;
+            
             try {
                 const response = await fetch(`${API_BASE}/tickets/${currentChatUserId}/reply`, {
                     method: 'POST',
@@ -620,13 +651,21 @@
                     body: JSON.stringify({ message })
                 });
                 
+                const result = await response.json();
+                
                 if (response.ok) {
                     input.value = '';
+                    // Reload messages to show the new one
                     await loadMessages(currentChatUserId);
+                } else {
+                    alert('Error: ' + (result.error || 'Failed to send message'));
                 }
             } catch (error) {
                 console.error('Error sending message:', error);
-                alert('Failed to send message');
+                alert('Failed to send message: ' + error.message);
+            } finally {
+                input.disabled = false;
+                input.focus();
             }
         }
 
