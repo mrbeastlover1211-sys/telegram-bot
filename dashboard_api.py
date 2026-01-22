@@ -11,7 +11,7 @@ import os
 import json
 
 app = Flask(__name__)
-CORS(app)  # Allow browser to connect
+CORS(app, resources={r"/api/*": {"origins": "*"}})  # Allow browser to connect from anywhere
 
 # Get database URL from environment variable
 DATABASE_URL = os.environ.get('DATABASE_URL', '')
@@ -23,7 +23,15 @@ def get_db_connection():
 @app.route('/')
 def index():
     """Serve the dashboard HTML."""
-    return send_file('dashboard.html')
+    try:
+        return send_file('dashboard.html')
+    except FileNotFoundError:
+        return "dashboard.html not found. Make sure you're in the correct directory.", 404
+
+@app.route('/health')
+def health():
+    """Health check endpoint."""
+    return jsonify({'status': 'ok', 'message': 'API is running'})
 
 @app.route('/api/tickets', methods=['GET'])
 def get_tickets():
