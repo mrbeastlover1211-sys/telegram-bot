@@ -1703,13 +1703,14 @@ async def category_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             messages = ticket.get('messages', [])
             if messages and len(messages) > 0:
                 first_msg = messages[0]['text']
-                if '5000 Gold' in first_msg:
+                # Use more flexible matching
+                if '5000 Gold' in first_msg or '5000Gold' in first_msg:
                     categories['option_1'] += 1
-                elif 'Promoters Reward' in first_msg:
+                elif 'Promoters Reward' in first_msg or 'Promoter' in first_msg:
                     categories['option_2'] += 1
-                elif 'Refer and Earn' in first_msg:
+                elif 'Refer and Earn' in first_msg or 'Refer' in first_msg:
                     categories['option_3'] += 1
-                elif 'Picaxe Issue' in first_msg:
+                elif 'Picaxe' in first_msg:
                     categories['option_4'] += 1
                 elif 'Wallet Issue' in first_msg:
                     categories['option_5'] += 1
