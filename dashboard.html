@@ -1,0 +1,659 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Telegram Bot Dashboard</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: #333;
+            min-height: 100vh;
+            padding: 20px;
+        }
+
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+        }
+
+        .header {
+            background: white;
+            padding: 20px 30px;
+            border-radius: 15px;
+            margin-bottom: 20px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .header h1 {
+            color: #667eea;
+            font-size: 28px;
+        }
+
+        .stats {
+            display: flex;
+            gap: 20px;
+        }
+
+        .stat-box {
+            text-align: center;
+        }
+
+        .stat-box .number {
+            font-size: 24px;
+            font-weight: bold;
+            color: #667eea;
+        }
+
+        .stat-box .label {
+            font-size: 12px;
+            color: #666;
+        }
+
+        .filters {
+            background: white;
+            padding: 15px 30px;
+            border-radius: 15px;
+            margin-bottom: 20px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+            display: flex;
+            gap: 10px;
+            flex-wrap: wrap;
+            align-items: center;
+        }
+
+        .filter-btn {
+            padding: 8px 16px;
+            border: 2px solid #667eea;
+            background: white;
+            color: #667eea;
+            border-radius: 20px;
+            cursor: pointer;
+            font-size: 14px;
+            transition: all 0.3s;
+        }
+
+        .filter-btn:hover {
+            background: #667eea;
+            color: white;
+        }
+
+        .filter-btn.active {
+            background: #667eea;
+            color: white;
+        }
+
+        .refresh-btn {
+            margin-left: auto;
+            padding: 8px 20px;
+            background: #10b981;
+            color: white;
+            border: none;
+            border-radius: 20px;
+            cursor: pointer;
+            font-size: 14px;
+        }
+
+        .refresh-btn:hover {
+            background: #059669;
+        }
+
+        .tickets-container {
+            background: white;
+            padding: 20px;
+            border-radius: 15px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+            max-height: 70vh;
+            overflow-y: auto;
+        }
+
+        .ticket-card {
+            border: 2px solid #e5e7eb;
+            border-radius: 10px;
+            padding: 15px;
+            margin-bottom: 15px;
+            transition: all 0.3s;
+        }
+
+        .ticket-card:hover {
+            border-color: #667eea;
+            box-shadow: 0 2px 8px rgba(102, 126, 234, 0.2);
+        }
+
+        .ticket-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 10px;
+        }
+
+        .ticket-user {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .ticket-user .avatar {
+            width: 40px;
+            height: 40px;
+            border-radius: 50%;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: white;
+            font-weight: bold;
+        }
+
+        .ticket-user .info h3 {
+            font-size: 16px;
+            color: #333;
+        }
+
+        .ticket-user .info p {
+            font-size: 12px;
+            color: #666;
+        }
+
+        .ticket-category {
+            padding: 4px 12px;
+            border-radius: 15px;
+            font-size: 12px;
+            font-weight: 500;
+        }
+
+        .cat-option_1 { background: #fef3c7; color: #92400e; }
+        .cat-option_2 { background: #dbeafe; color: #1e40af; }
+        .cat-option_3 { background: #d1fae5; color: #065f46; }
+        .cat-option_4 { background: #fce7f3; color: #9f1239; }
+        .cat-option_5 { background: #e0e7ff; color: #3730a3; }
+        .cat-contact_support { background: #f3e8ff; color: #6b21a8; }
+
+        .ticket-body {
+            margin: 10px 0;
+            padding: 10px;
+            background: #f9fafb;
+            border-radius: 8px;
+        }
+
+        .ticket-body .label {
+            font-size: 11px;
+            color: #666;
+            margin-bottom: 5px;
+        }
+
+        .ticket-body .value {
+            font-size: 13px;
+            color: #333;
+        }
+
+        .ticket-actions {
+            display: flex;
+            gap: 10px;
+            margin-top: 10px;
+        }
+
+        .btn {
+            padding: 8px 16px;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 14px;
+            transition: all 0.3s;
+        }
+
+        .btn-chat {
+            background: #667eea;
+            color: white;
+            flex: 1;
+        }
+
+        .btn-chat:hover {
+            background: #5568d3;
+        }
+
+        .btn-close {
+            background: #ef4444;
+            color: white;
+        }
+
+        .btn-close:hover {
+            background: #dc2626;
+        }
+
+        /* Chat Modal */
+        .modal {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0,0,0,0.5);
+            z-index: 1000;
+            justify-content: center;
+            align-items: center;
+        }
+
+        .modal.active {
+            display: flex;
+        }
+
+        .chat-window {
+            background: white;
+            width: 600px;
+            max-width: 90%;
+            height: 80vh;
+            border-radius: 15px;
+            display: flex;
+            flex-direction: column;
+            box-shadow: 0 10px 40px rgba(0,0,0,0.3);
+        }
+
+        .chat-header {
+            padding: 20px;
+            border-bottom: 2px solid #e5e7eb;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .chat-header h2 {
+            color: #667eea;
+            font-size: 20px;
+        }
+
+        .close-modal {
+            background: none;
+            border: none;
+            font-size: 24px;
+            cursor: pointer;
+            color: #999;
+        }
+
+        .close-modal:hover {
+            color: #333;
+        }
+
+        .chat-messages {
+            flex: 1;
+            padding: 20px;
+            overflow-y: auto;
+            background: #f9fafb;
+        }
+
+        .message {
+            margin-bottom: 15px;
+            display: flex;
+        }
+
+        .message.user {
+            justify-content: flex-start;
+        }
+
+        .message.admin {
+            justify-content: flex-end;
+        }
+
+        .message-bubble {
+            max-width: 70%;
+            padding: 10px 15px;
+            border-radius: 15px;
+            word-wrap: break-word;
+        }
+
+        .message.user .message-bubble {
+            background: #e5e7eb;
+            color: #333;
+        }
+
+        .message.admin .message-bubble {
+            background: #667eea;
+            color: white;
+        }
+
+        .message-time {
+            font-size: 10px;
+            opacity: 0.7;
+            margin-top: 5px;
+        }
+
+        .chat-input {
+            padding: 20px;
+            border-top: 2px solid #e5e7eb;
+            display: flex;
+            gap: 10px;
+        }
+
+        .chat-input input {
+            flex: 1;
+            padding: 12px;
+            border: 2px solid #e5e7eb;
+            border-radius: 10px;
+            font-size: 14px;
+        }
+
+        .chat-input input:focus {
+            outline: none;
+            border-color: #667eea;
+        }
+
+        .chat-input button {
+            padding: 12px 24px;
+            background: #667eea;
+            color: white;
+            border: none;
+            border-radius: 10px;
+            cursor: pointer;
+            font-size: 14px;
+        }
+
+        .chat-input button:hover {
+            background: #5568d3;
+        }
+
+        .loading {
+            text-align: center;
+            padding: 40px;
+            color: #666;
+        }
+
+        .empty-state {
+            text-align: center;
+            padding: 60px 20px;
+            color: #999;
+        }
+
+        .empty-state h3 {
+            font-size: 24px;
+            margin-bottom: 10px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <!-- Header -->
+        <div class="header">
+            <h1>🎮 Gold Mining Bot Dashboard</h1>
+            <div class="stats">
+                <div class="stat-box">
+                    <div class="number" id="active-count">0</div>
+                    <div class="label">Active</div>
+                </div>
+                <div class="stat-box">
+                    <div class="number" id="closed-count">0</div>
+                    <div class="label">Closed</div>
+                </div>
+                <div class="stat-box">
+                    <div class="number" id="users-count">0</div>
+                    <div class="label">Users</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Filters -->
+        <div class="filters">
+            <button class="filter-btn active" data-category="all">🔍 All Tickets</button>
+            <button class="filter-btn" data-category="option_1">💰 5000 Gold</button>
+            <button class="filter-btn" data-category="option_2">🎁 Promoters</button>
+            <button class="filter-btn" data-category="option_3">👥 Refer & Earn</button>
+            <button class="filter-btn" data-category="option_4">⛏️ Picaxe</button>
+            <button class="filter-btn" data-category="option_5">💳 Wallet</button>
+            <button class="filter-btn" data-category="contact_support">💬 Support</button>
+            <button class="refresh-btn" onclick="loadTickets()">🔄 Refresh</button>
+        </div>
+
+        <!-- Tickets -->
+        <div class="tickets-container" id="tickets-container">
+            <div class="loading">Loading tickets...</div>
+        </div>
+    </div>
+
+    <!-- Chat Modal -->
+    <div class="modal" id="chat-modal">
+        <div class="chat-window">
+            <div class="chat-header">
+                <h2 id="chat-user-name">User</h2>
+                <button class="close-modal" onclick="closeChat()">×</button>
+            </div>
+            <div class="chat-messages" id="chat-messages">
+                <!-- Messages will be loaded here -->
+            </div>
+            <div class="chat-input">
+                <input type="text" id="message-input" placeholder="Type your message..." onkeypress="handleKeyPress(event)">
+                <button onclick="sendMessage()">Send</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const API_BASE = 'http://localhost:5000/api';
+        let currentCategory = 'all';
+        let currentChatUserId = null;
+
+        // Category labels
+        const categoryLabels = {
+            'option_1': '💰 5000 Gold for X Post',
+            'option_2': '🎁 Promoters Reward',
+            'option_3': '👥 Refer and Earn Reward',
+            'option_4': '⛏️ Picaxe Issue',
+            'option_5': '💳 Wallet Issue',
+            'contact_support': '💬 Contact Support'
+        };
+
+        // Load statistics
+        async function loadStats() {
+            try {
+                const response = await fetch(`${API_BASE}/stats`);
+                const stats = await response.json();
+                
+                document.getElementById('active-count').textContent = stats.active_tickets;
+                document.getElementById('closed-count').textContent = stats.closed_tickets;
+                document.getElementById('users-count').textContent = stats.total_users;
+            } catch (error) {
+                console.error('Error loading stats:', error);
+            }
+        }
+
+        // Load tickets
+        async function loadTickets() {
+            try {
+                const response = await fetch(`${API_BASE}/tickets?category=${currentCategory}`);
+                const tickets = await response.json();
+                
+                const container = document.getElementById('tickets-container');
+                
+                if (tickets.length === 0) {
+                    container.innerHTML = `
+                        <div class="empty-state">
+                            <h3>📭 No Tickets</h3>
+                            <p>No active tickets in this category</p>
+                        </div>
+                    `;
+                    return;
+                }
+                
+                container.innerHTML = tickets.map(ticket => {
+                    const messages = ticket.messages || [];
+                    const messageCount = messages.length;
+                    const lastMessage = messages[messages.length - 1];
+                    const lastMessageText = lastMessage ? lastMessage.text.substring(0, 50) : 'No messages';
+                    
+                    // Extract wallet from messages
+                    let wallet = 'Not provided';
+                    for (const msg of messages) {
+                        if (msg.text.startsWith('Wallet: ')) {
+                            wallet = msg.text.replace('Wallet: ', '').substring(0, 20) + '...';
+                            break;
+                        }
+                    }
+                    
+                    return `
+                        <div class="ticket-card">
+                            <div class="ticket-header">
+                                <div class="ticket-user">
+                                    <div class="avatar">${ticket.first_name.charAt(0)}</div>
+                                    <div class="info">
+                                        <h3>${ticket.first_name} ${ticket.last_name}</h3>
+                                        <p>@${ticket.username} • ID: ${ticket.user_id}</p>
+                                    </div>
+                                </div>
+                                <span class="ticket-category cat-${ticket.category}">
+                                    ${categoryLabels[ticket.category] || ticket.category}
+                                </span>
+                            </div>
+                            <div class="ticket-body">
+                                <div class="label">💳 Wallet:</div>
+                                <div class="value">${wallet}</div>
+                                <div class="label" style="margin-top: 8px;">💬 Last Message:</div>
+                                <div class="value">${lastMessageText}${lastMessageText.length >= 50 ? '...' : ''}</div>
+                                <div class="label" style="margin-top: 8px;">📊 Total Messages: ${messageCount}</div>
+                            </div>
+                            <div class="ticket-actions">
+                                <button class="btn btn-chat" onclick="openChat(${ticket.user_id}, '${ticket.first_name}')">
+                                    💬 Chat
+                                </button>
+                                <button class="btn btn-close" onclick="closeTicket(${ticket.user_id})">
+                                    🔒 Close
+                                </button>
+                            </div>
+                        </div>
+                    `;
+                }).join('');
+                
+            } catch (error) {
+                console.error('Error loading tickets:', error);
+                document.getElementById('tickets-container').innerHTML = `
+                    <div class="empty-state">
+                        <h3>⚠️ Error</h3>
+                        <p>Failed to load tickets. Make sure the API is running.</p>
+                        <p style="font-size: 12px; color: #999;">${error.message}</p>
+                    </div>
+                `;
+            }
+        }
+
+        // Filter tickets
+        document.querySelectorAll('.filter-btn').forEach(btn => {
+            btn.addEventListener('click', function() {
+                document.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
+                this.classList.add('active');
+                currentCategory = this.dataset.category;
+                loadTickets();
+            });
+        });
+
+        // Open chat
+        async function openChat(userId, userName) {
+            currentChatUserId = userId;
+            document.getElementById('chat-user-name').textContent = userName;
+            document.getElementById('chat-modal').classList.add('active');
+            await loadMessages(userId);
+        }
+
+        // Close chat
+        function closeChat() {
+            document.getElementById('chat-modal').classList.remove('active');
+            currentChatUserId = null;
+        }
+
+        // Load messages
+        async function loadMessages(userId) {
+            try {
+                const response = await fetch(`${API_BASE}/tickets/${userId}/messages`);
+                const messages = await response.json();
+                
+                const container = document.getElementById('chat-messages');
+                container.innerHTML = messages.map(msg => `
+                    <div class="message ${msg.from}">
+                        <div class="message-bubble">
+                            <div>${msg.text}</div>
+                            <div class="message-time">${msg.time}</div>
+                        </div>
+                    </div>
+                `).join('');
+                
+                // Scroll to bottom
+                container.scrollTop = container.scrollHeight;
+            } catch (error) {
+                console.error('Error loading messages:', error);
+            }
+        }
+
+        // Send message
+        async function sendMessage() {
+            const input = document.getElementById('message-input');
+            const message = input.value.trim();
+            
+            if (!message || !currentChatUserId) return;
+            
+            try {
+                const response = await fetch(`${API_BASE}/tickets/${currentChatUserId}/reply`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({ message })
+                });
+                
+                if (response.ok) {
+                    input.value = '';
+                    await loadMessages(currentChatUserId);
+                }
+            } catch (error) {
+                console.error('Error sending message:', error);
+                alert('Failed to send message');
+            }
+        }
+
+        // Handle Enter key
+        function handleKeyPress(event) {
+            if (event.key === 'Enter') {
+                sendMessage();
+            }
+        }
+
+        // Close ticket
+        async function closeTicket(userId) {
+            if (!confirm('Are you sure you want to close this ticket?')) {
+                return;
+            }
+            
+            try {
+                const response = await fetch(`${API_BASE}/tickets/${userId}/close`, {
+                    method: 'POST'
+                });
+                
+                if (response.ok) {
+                    alert('Ticket closed successfully!');
+                    loadTickets();
+                    loadStats();
+                }
+            } catch (error) {
+                console.error('Error closing ticket:', error);
+                alert('Failed to close ticket');
+            }
+        }
+
+        // Auto-refresh every 30 seconds
+        setInterval(() => {
+            loadTickets();
+            loadStats();
+        }, 30000);
+
+        // Initial load
+        loadStats();
+        loadTickets();
+    </script>
+</body>
+</html>
