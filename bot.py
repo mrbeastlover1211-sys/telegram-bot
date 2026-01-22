@@ -265,7 +265,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     # Admin gets special admin panel
     if is_admin:
         keyboard = [
-            [InlineKeyboardButton("🎫 Active Tickets", callback_data='admin_tickets')],
+            [InlineKeyboardButton("🎫 All Active Tickets", callback_data='admin_tickets')],
+            [InlineKeyboardButton("📋 Tickets by Category", callback_data='admin_tickets_category')],
             [InlineKeyboardButton("🚀 Quick Close Dashboard", callback_data='admin_quick_close')],
             [InlineKeyboardButton("📊 Statistics", callback_data='admin_stats')],
             [InlineKeyboardButton("👥 All Users", callback_data='admin_users')],
@@ -416,6 +417,205 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
             )
         finally:
             db_pool.putconn(conn)
+        return
+    
+    # Handle Tickets by Category menu
+    if option == 'admin_tickets_category':
+        if user.id != ADMIN_ID:
+            await query.answer("❌ Only admin can use this", show_alert=True)
+            return
+        
+        await query.answer()
+        
+        # Get ticket counts by category
+        if not db_pool:
+            await context.bot.send_message(
+                chat_id=ADMIN_ID,
+                text="❌ Database not connected."
+            )
+            return
+        
+        conn = db_pool.getconn()
+        try:
+            cursor = conn.cursor(cursor_factory=RealDictCursor)
+            
+            # Get all active tickets
+            cursor.execute('''
+                SELECT user_id, messages FROM tickets WHERE active = TRUE
+            ''')
+            tickets = cursor.fetchall()
+            cursor.close()
+            
+            # Count tickets by category
+            categories = {
+                'option_1': 0,
+                'option_2': 0,
+                'option_3': 0,
+                'option_4': 0,
+                'option_5': 0,
+                'contact_support': 0
+            }
+            
+            for ticket in tickets:
+                messages = ticket.get('messages', [])
+                if messages and len(messages) > 0:
+                    first_msg = messages[0]['text']
+                    if '5000 Gold' in first_msg:
+                        categories['option_1'] += 1
+                    elif 'Promoters Reward' in first_msg:
+                        categories['option_2'] += 1
+                    elif 'Refer and Earn' in first_msg:
+                        categories['option_3'] += 1
+                    elif 'Picaxe Issue' in first_msg:
+                        categories['option_4'] += 1
+                    elif 'Wallet Issue' in first_msg:
+                        categories['option_5'] += 1
+                    elif 'Contact Support' in first_msg:
+                        categories['contact_support'] += 1
+            
+            # Create menu with category buttons
+            keyboard = [
+                [InlineKeyboardButton(f"💰 5000 Gold for X Post ({categories['option_1']})", callback_data='admin_cat_option_1')],
+                [InlineKeyboardButton(f"🎁 Promoters Reward ({categories['option_2']})", callback_data='admin_cat_option_2')],
+                [InlineKeyboardButton(f"👥 Refer and Earn ({categories['option_3']})", callback_data='admin_cat_option_3')],
+                [InlineKeyboardButton(f"⛏️ Picaxe Issue ({categories['option_4']})", callback_data='admin_cat_option_4')],
+                [InlineKeyboardButton(f"💳 Wallet Issue ({categories['option_5']})", callback_data='admin_cat_option_5')],
+                [InlineKeyboardButton(f"💬 Contact Support ({categories['contact_support']})", callback_data='admin_cat_contact_support')],
+                [InlineKeyboardButton("🔙 Back to Admin Panel", callback_data='admin_back')]
+            ]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            
+            message = (
+                f"📋 Tickets by Category\n\n"
+                f"Select a category to view tickets:\n"
+            )
+            
+            await context.bot.send_message(
+                chat_id=ADMIN_ID,
+                text=message,
+                reply_markup=reply_markup
+            )
+        finally:
+            db_pool.putconn(conn)
+        return
+    
+    # Handle category-specific ticket views
+    if option.startswith('admin_cat_'):
+        if user.id != ADMIN_ID:
+            await query.answer("❌ Only admin can use this", show_alert=True)
+            return
+        
+        await query.answer("Loading tickets...", show_alert=False)
+        
+        # Extract category
+        category = option.replace('admin_cat_', '')
+        
+        # Map category to search term
+        category_map = {
+            'option_1': '💰 5000 Gold',
+            'option_2': '🎁 Promoters Reward',
+            'option_3': '👥 Refer and Earn',
+            'option_4': '⛏️ Picaxe Issue',
+            'option_5': '💳 Wallet Issue',
+            'contact_support': '💬 Contact Support'
+        }
+        
+        search_term = category_map.get(category, '')
+        
+        # Get tickets for this category
+        all_tickets = get_active_tickets()
+        filtered_tickets = []
+        
+        for ticket in all_tickets:
+            messages = ticket.get('messages', [])
+            if messages and len(messages) > 0:
+                first_msg = messages[0]['text']
+                if search_term[2:] in first_msg:  # Remove emoji from search
+                    filtered_tickets.append(ticket)
+        
+        if not filtered_tickets:
+            await context.bot.send_message(
+                chat_id=ADMIN_ID,
+                text=f"📭 No active tickets in category: {category_map.get(category, 'Unknown')}"
+            )
+            return
+        
+        await context.bot.send_message(
+            chat_id=ADMIN_ID,
+            text=f"📋 {category_map.get(category, 'Unknown')} - {len(filtered_tickets)} ticket(s)"
+        )
+        
+        # Show each ticket with action buttons
+        for ticket in filtered_tickets:
+            user_id = ticket['user_id']
+            first_name = ticket['first_name']
+            username = ticket.get('username', 'no_username')
+            messages = ticket.get('messages', [])
+            
+            # Build ticket info from messages
+            wallet = "Not provided"
+            additional_info = ""
+            
+            for msg in messages:
+                if 'Wallet:' in msg['text']:
+                    wallet = msg['text'].replace('Wallet: ', '')
+                elif 'X Post Link:' in msg['text']:
+                    additional_info = f"\n🔗 X Post: {msg['text'].replace('X Post Link: ', '')}"
+                elif 'Issue:' in msg['text']:
+                    additional_info = f"\n🐛 Issue: {msg['text'].replace('Issue: ', '')}"
+                elif 'Problem:' in msg['text']:
+                    additional_info = f"\n📝 Problem: {msg['text'].replace('Problem: ', '')}"
+                elif 'Question/Issue:' in msg['text']:
+                    additional_info = f"\n❓ Question: {msg['text'].replace('Question/Issue: ', '')}"
+            
+            # Create inline keyboard with action buttons
+            keyboard = [
+                [
+                    InlineKeyboardButton("💬 Reply", callback_data=f'quick_reply_{user_id}'),
+                    InlineKeyboardButton("🔒 Close", callback_data=f'close_ticket_{user_id}')
+                ],
+                [InlineKeyboardButton("📜 View History", callback_data=f'view_history_{user_id}')]
+            ]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+            
+            ticket_info = (
+                f"🎫 {category_map.get(category, 'Ticket')}\n\n"
+                f"👤 {first_name} (@{username})\n"
+                f"🆔 ID: {user_id}\n"
+                f"💳 Wallet: {wallet}\n"
+                f"{additional_info}\n"
+                f"💬 Total Messages: {len(messages)}\n"
+                f"{'─' * 30}"
+            )
+            
+            await context.bot.send_message(
+                chat_id=ADMIN_ID,
+                text=ticket_info,
+                reply_markup=reply_markup
+            )
+        return
+    
+    # Handle back to admin panel
+    if option == 'admin_back':
+        if user.id != ADMIN_ID:
+            await query.answer("❌ Only admin can use this", show_alert=True)
+            return
+        
+        keyboard = [
+            [InlineKeyboardButton("🎫 All Active Tickets", callback_data='admin_tickets')],
+            [InlineKeyboardButton("📋 Tickets by Category", callback_data='admin_tickets_category')],
+            [InlineKeyboardButton("🚀 Quick Close Dashboard", callback_data='admin_quick_close')],
+            [InlineKeyboardButton("📊 Statistics", callback_data='admin_stats')],
+            [InlineKeyboardButton("👥 All Users", callback_data='admin_users')],
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        
+        await query.edit_message_text(
+            text=f'👨‍💼 Admin Panel\n\n'
+                 f'Welcome back!\n'
+                 f'Choose an action below:',
+            reply_markup=reply_markup
+        )
         return
     
     if option == 'admin_users':
