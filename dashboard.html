@@ -574,7 +574,7 @@
             document.getElementById('chat-modal').classList.add('active');
             await loadMessages(userId);
             
-            // Auto-refresh messages every 10 minutes while chat is open
+            // Auto-refresh messages every 1 hour while chat is open
             if (window.chatRefreshInterval) {
                 clearInterval(window.chatRefreshInterval);
             }
@@ -582,7 +582,7 @@
                 if (currentChatUserId === userId) {
                     await loadMessages(userId);
                 }
-            }, 600000); // 10 minutes = 600,000 milliseconds
+            }, 3600000); // 1 hour = 3,600,000 milliseconds
         }
 
         // Close chat
@@ -698,11 +698,11 @@
             }
         }
 
-        // Auto-refresh every 10 minutes
+        // Auto-refresh every 1 hour
         setInterval(() => {
             loadTickets();
             loadStats();
-        }, 600000); // 10 minutes = 600,000 milliseconds
+        }, 3600000); // 1 hour = 3,600,000 milliseconds
 
         // Initial load
         loadStats();
